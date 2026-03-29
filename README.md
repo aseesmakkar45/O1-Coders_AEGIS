@@ -42,6 +42,8 @@ The complete architectural reasoning, database schemas, and detection logic mech
 
 ## Deployment
 
+**Live Demo:** [https://o1-coders-aegis.onrender.com](https://o1-coders-aegis.onrender.com)
+
 AEGIS is self-contained. 
 ```bash
 # 1. Install dependencies
