@@ -42,7 +42,7 @@ The complete architectural reasoning, database schemas, and detection logic mech
 
 ## Deployment
 
-**Live Demo:** [https://o1-coders-aegis.onrender.com](https://o1-coders-aegis.onrender.com)
+**Live Demo:** [https://o1-coders-aegis-i30a.onrender.com](https://o1-coders-aegis-i30a.onrender.com)
 
 AEGIS is self-contained. 
 ```bash
