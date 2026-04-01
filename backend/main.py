@@ -11,6 +11,7 @@ from simulation.dataset_streamer import DatasetStreamer
 from engine.dataset_reconstructor import DatasetReconstructor
 import asyncio
 import os
+import traceback
 
 app = FastAPI(title="AEGIS Master Backend — Dataset Driven")
 
@@ -26,6 +27,7 @@ streamer = DatasetStreamer()
 reconstructor = DatasetReconstructor()
 clients = []
 is_paused = False
+loop_status = {"running": False, "ticks": 0, "last_error": None, "last_tick_time": None, "clients_count": 0}
 
 @app.get("/")
 def read_root():
@@ -185,24 +187,37 @@ async def simulation_loop():
     Outputs: Mutated reconstructed State.
     Logic Summary: Evaluates pause state, extracts batched datasets, pushes to reconstructor pipeline, formats dictionary, and broadcasts iteratively to listening WebSocket client pool.
     """
+    loop_status["running"] = True
+    print("[AEGIS] Simulation loop STARTED")
     while True:
-        if not is_paused:
-            batch = streamer.get_batch()
-            if batch:
-                state = reconstructor.process_batch(batch)
-                state["total_registry_nodes"] = len(streamer.registry)
-                state["stream_mode"] = streamer.stream_mode
-                state["total_events"] = streamer.get_total_events()
+        try:
+            if not is_paused:
+                batch = streamer.get_batch()
+                if batch:
+                    state = reconstructor.process_batch(batch)
+                    state["total_registry_nodes"] = len(streamer.registry)
+                    state["stream_mode"] = streamer.stream_mode
+                    state["total_events"] = streamer.get_total_events()
 
-                if clients:
-                    dead_clients = []
-                    for c in clients:
-                        try:
-                            await c.send_json(state)
-                        except Exception:
-                            dead_clients.append(c)
-                    for c in dead_clients:
-                        clients.remove(c)
+                    loop_status["ticks"] += 1
+                    loop_status["last_tick_time"] = str(asyncio.get_event_loop().time())
+                    loop_status["clients_count"] = len(clients)
+
+                    if clients:
+                        dead_clients = []
+                        for c in clients:
+                            try:
+                                await c.send_json(state)
+                            except Exception:
+                                dead_clients.append(c)
+                        for c in dead_clients:
+                            clients.remove(c)
+                else:
+                    print("[AEGIS] WARNING: get_batch() returned empty")
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+            print(f"[AEGIS] SIMULATION LOOP ERROR: {error_msg}")
+            loop_status["last_error"] = error_msg
 
         await asyncio.sleep(1.5)  # Multi-node batch every 1.5 seconds
 
@@ -214,7 +229,23 @@ async def startup_event():
     Outputs: Execution daemon.
     Logic Summary: Deploys asyncio simulation task decoupled from blocking synchronous network handlers.
     """
+    print("[AEGIS] Starting simulation loop task...")
     asyncio.create_task(simulation_loop())
+
+@app.get("/api/debug")
+def debug_status():
+    """Debug endpoint to check simulation loop health remotely."""
+    return {
+        "loop_status": loop_status,
+        "streamer_position": streamer.get_current_position(),
+        "streamer_total": streamer.get_total_events(),
+        "streamer_logs_loaded": len(streamer.logs),
+        "streamer_registry_loaded": len(streamer.registry),
+        "connected_clients": len(clients),
+        "is_paused": is_paused,
+        "reconstructor_tick": reconstructor.tick_counter,
+        "reconstructor_nodes": len(reconstructor.nodes)
+    }
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
