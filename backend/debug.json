@@ -1,0 +1,17 @@
+{
+  "loop_status": {
+    "running": true,
+    "ticks": 141,
+    "last_error": null,
+    "last_tick_time": "452617.9501169",
+    "clients_count": 1
+  },
+  "streamer_position": 0,
+  "streamer_total": 10000,
+  "streamer_logs_loaded": 10000,
+  "streamer_registry_loaded": 500,
+  "connected_clients": 1,
+  "is_paused": true,
+  "reconstructor_tick": 0,
+  "reconstructor_nodes": 0
+}
