@@ -1,0 +1,255 @@
+                    <div className="flex flex-col h-full text-slate-800 relative" style={{display: activeTab === 'schema' ? 'flex' : 'none'}}>
+                        <div className="absolute inset-0 pointer-events-none z-0" style={{backgroundImage: 'radial-gradient(rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)', backgroundSize: '24px 24px, 100% 100%'}}></div>
+                        <div className="relative z-10 flex flex-col h-full overflow-hidden">
+
+                        {/* === HERO SUMMARY STRIP === */}
+                        <div className="flex items-stretch gap-3 px-5 py-3 border-b border-slate-200/80 bg-white/80 backdrop-blur-sm shrink-0">
+                            <div className="flex items-center gap-2 pr-4 border-r border-slate-200">
+                                <span className="w-2 h-2 rounded-sm bg-indigo-500 shadow-[0_0_6px_rgba(99,102,241,0.5)]" style={{animation: 'softPulse 3s ease-in-out infinite'}}></span>
+                                <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-widest">L3 Schema Engine</span>
+                            </div>
+                            <div className="flex items-center gap-2.5 px-4 py-1.5 bg-blue-50 border border-blue-200 rounded-lg min-w-[120px]">
+                                <div className="text-2xl font-black text-blue-600 font-mono leading-none">{uniqueVersionCount}</div>
+                                <div className="text-[8px] font-bold text-blue-500 uppercase tracking-widest leading-tight">Active<br/>Versions</div>
+                            </div>
+                            <div className={`flex items-center gap-2.5 px-4 py-1.5 rounded-lg min-w-[120px] border transition-all duration-500 ${(attackVectors.SCHEMA_ROTATION || 0) > 0 ? 'bg-red-50 border-red-200 card-glow-red' : 'bg-slate-50 border-slate-200'}`}>
+                                <div className={`text-2xl font-black font-mono leading-none ${(attackVectors.SCHEMA_ROTATION || 0) > 0 ? 'text-red-600' : 'text-slate-400'}`}>{attackVectors.SCHEMA_ROTATION || 0}</div>
+                                <div className={`text-[8px] font-bold uppercase tracking-widest leading-tight ${(attackVectors.SCHEMA_ROTATION || 0) > 0 ? 'text-red-500' : 'text-slate-400'}`}>Structural<br/>Mismatches</div>
+                            </div>
+                            <div className={`flex items-center gap-2.5 px-4 py-1.5 rounded-lg min-w-[120px] border ${schemaLogs.filter(l => l.color === 'yellow').length > 0 ? 'bg-yellow-50 border-yellow-200' : 'bg-slate-50 border-slate-200'}`}>
+                                <div className={`text-2xl font-black font-mono leading-none ${schemaLogs.filter(l => l.color === 'yellow').length > 0 ? 'text-yellow-600' : 'text-slate-400'}`}>{schemaLogs.filter(l => l.color === 'yellow').length}</div>
+                                <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest leading-tight">Schema<br/>Rotations</div>
+                            </div>
+                            <div className={`flex items-center gap-2.5 px-4 py-1.5 rounded-lg min-w-[120px] border transition-all duration-500 ${schemaFailingNodes > 0 ? 'bg-purple-50 border-purple-200 card-glow-purple' : 'bg-slate-50 border-slate-200'}`}>
+                                <div className={`text-2xl font-black font-mono leading-none ${schemaFailingNodes > 0 ? 'text-purple-600' : 'text-slate-400'}`}>{schemaFailingNodes}</div>
+                                <div className={`text-[8px] font-bold uppercase tracking-widest leading-tight ${schemaFailingNodes > 0 ? 'text-purple-500' : 'text-slate-400'}`}>Compromised<br/>Nodes</div>
+                            </div>
+                            <div className="flex-1 flex items-center gap-3 pl-4 border-l border-slate-200 min-w-[180px]">
+                                <div className="flex-1">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Schema Integrity</span>
+                                        <span className={`text-xs font-mono font-black ${schemaStability >= 80 ? 'text-green-600' : schemaStability >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>{schemaStability}%</span>
+                                    </div>
+                                    <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                                        <div className="h-full rounded-full transition-all duration-700" style={{width: `${schemaStability}%`, background: `linear-gradient(90deg, ${schemaStability < 50 ? '#dc2626' : schemaStability < 80 ? '#eab308' : '#16a34a'}, ${schemaStability < 50 ? '#f87171' : schemaStability < 80 ? '#fbbf24' : '#4ade80'})`}}></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* === MAIN BODY === */}
+                        <div className="flex-1 flex overflow-hidden">
+                            {/* LEFT: Flow Engine + Visuals */}
+                            <div className="flex-1 flex flex-col overflow-y-auto" style={{scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 transparent'}}>
+
+                                {showBurst && (
+                                    <div className="burst-banner mx-5 mt-3 bg-gradient-to-r from-red-600 to-red-500 text-white px-4 py-2 rounded-lg flex items-center gap-3 shadow-lg shadow-red-500/20">
+                                        <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                        <span className="text-[10px] font-bold uppercase tracking-widest">Schema Anomaly Burst Detected</span>
+                                    </div>
+                                )}
+
+                                {/* SCHEMA FLOW ENGINE */}
+                                <div className="p-5">
+                                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                        Schema Validation Pipeline {activeFlowLog && <span className="text-slate-400 font-normal">— Node-{activeFlowLog.nodeId}</span>}
+                                    </div>
+                                    <div className="flex items-center gap-0 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                                        {/* Stage 1: Payload Input */}
+                                        <div className={`flex-1 border-2 rounded-lg p-3 text-center transition-all duration-300 cursor-pointer ${flowBg[flowState.input]}`} onClick={() => activeFlowLog && setSelectedSchemaLog(activeFlowLog)}>
+                                            <div className="w-8 h-8 mx-auto mb-2 rounded-full flex items-center justify-center" style={{backgroundColor: flowColors[flowState.input] + '20', border: `2px solid ${flowColors[flowState.input]}`}}>
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke={flowColors[flowState.input]} strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                                            </div>
+                                            <div className={`text-[10px] font-bold uppercase tracking-wider ${flowText[flowState.input]}`}>Payload Input</div>
+                                            <div className="text-[8px] text-slate-400 mt-0.5 font-mono">{activeFlowLog ? activeFlowLog.version : '—'}</div>
+                                        </div>
+                                        <div className="w-10 flex items-center justify-center shrink-0"><div className="w-full h-[2px] relative" style={{backgroundColor: flowColors[flowState.parser]}}><div className="absolute right-0 top-1/2 -translate-y-1/2 w-0 h-0 border-t-[5px] border-b-[5px] border-l-[7px] border-transparent" style={{borderLeftColor: flowColors[flowState.parser]}}></div></div></div>
+                                        {/* Stage 2: Schema Parser */}
+                                        <div className={`flex-1 border-2 rounded-lg p-3 text-center transition-all duration-300 ${flowBg[flowState.parser]}`}>
+                                            <div className="w-8 h-8 mx-auto mb-2 rounded-full flex items-center justify-center" style={{backgroundColor: flowColors[flowState.parser] + '20', border: `2px solid ${flowColors[flowState.parser]}`}}>
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke={flowColors[flowState.parser]} strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+                                            </div>
+                                            <div className={`text-[10px] font-bold uppercase tracking-wider ${flowText[flowState.parser]}`}>Schema Parser</div>
+                                            <div className="text-[8px] text-slate-400 mt-0.5 font-mono">{flowState.parser === 'warning' ? 'VERSION CHANGED' : flowState.parser === 'active' ? 'DECODED' : '—'}</div>
+                                        </div>
+                                        <div className="w-10 flex items-center justify-center shrink-0"><div className="w-full h-[2px] relative" style={{backgroundColor: flowColors[flowState.validator]}}>{flowState.validator === 'fail' && <div className="absolute inset-0 flex items-center justify-center"><div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center shadow-[0_0_10px_rgba(239,68,68,0.6)]"><svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg></div></div>}<div className="absolute right-0 top-1/2 -translate-y-1/2 w-0 h-0 border-t-[5px] border-b-[5px] border-l-[7px] border-transparent" style={{borderLeftColor: flowColors[flowState.validator]}}></div></div></div>
+                                        {/* Stage 3: Validation Engine */}
+                                        <div className={`flex-1 border-2 rounded-lg p-3 text-center transition-all duration-300 ${flowBg[flowState.validator]} ${flowState.validator === 'fail' ? 'soft-pulse' : ''}`}>
+                                            <div className="w-8 h-8 mx-auto mb-2 rounded-full flex items-center justify-center" style={{backgroundColor: flowColors[flowState.validator] + '20', border: `2px solid ${flowColors[flowState.validator]}`}}>
+                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke={flowColors[flowState.validator]} strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                                            </div>
+                                            <div className={`text-[10px] font-bold uppercase tracking-wider ${flowText[flowState.validator]}`}>Validation Engine</div>
+                                            <div className="text-[8px] mt-0.5 font-mono" style={{color: flowColors[flowState.validator]}}>{flowState.validator === 'fail' ? 'STRUCTURAL BREAK' : flowState.validator === 'active' ? 'FIELDS VERIFIED' : '—'}</div>
+                                        </div>
+                                        <div className="w-10 flex items-center justify-center shrink-0"><div className="w-full h-[2px] relative" style={{backgroundColor: flowColors[flowState.verdict]}}><div className="absolute right-0 top-1/2 -translate-y-1/2 w-0 h-0 border-t-[5px] border-b-[5px] border-l-[7px] border-transparent" style={{borderLeftColor: flowColors[flowState.verdict]}}></div></div></div>
+                                        {/* Stage 4: Verdict */}
+                                        <div className={`flex-1 border-2 rounded-lg p-3 text-center transition-all duration-300 ${flowBg[flowState.verdict]}`}>
+                                            <div className="w-8 h-8 mx-auto mb-2 rounded-full flex items-center justify-center" style={{backgroundColor: flowColors[flowState.verdict] + '20', border: `2px solid ${flowColors[flowState.verdict]}`}}>
+                                                {flowState.verdict === 'fail' ? <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="#ef4444" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg> : <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke={flowColors[flowState.verdict]} strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                                            </div>
+                                            <div className={`text-[10px] font-bold uppercase tracking-wider ${flowText[flowState.verdict]}`}>{flowState.verdict === 'fail' ? 'REJECTED' : flowState.verdict === 'warning' ? 'FLAGGED' : flowState.verdict === 'pass' ? 'ACCEPTED' : 'WAITING'}</div>
+                                            <div className="text-[8px] mt-0.5 font-mono" style={{color: flowColors[flowState.verdict]}}>{flowState.verdict === 'fail' ? 'QUARANTINED' : flowState.verdict === 'pass' ? 'TRUSTED' : '—'}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* VERSION DISTRIBUTION + NODE INTEGRITY GRID */}
+                                <div className="flex gap-4 px-5 pb-4">
+                                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm w-[220px] shrink-0">
+                                        <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-3">Version Distribution</div>
+                                        <div className="flex items-center gap-4">
+                                            <div className="relative w-20 h-20 shrink-0">
+                                                <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                                                    {ringChartSegments.map((seg, i) => (<circle key={i} cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke={seg.color} strokeWidth="3.5" strokeDasharray={seg.dashArray} strokeDashoffset={seg.offset} className="transition-all duration-1000 ease-out" />))}
+                                                </svg>
+                                                <div className="absolute inset-0 flex items-center justify-center"><div className="text-center"><div className="text-sm font-black text-slate-700">v{activeMasterVersion.replace('v','')}</div><div className="text-[7px] text-slate-400 uppercase">primary</div></div></div>
+                                            </div>
+                                            <div className="flex flex-col gap-1.5">
+                                                {ringChartSegments.map(seg => (<div key={seg.v} className="flex items-center gap-1.5 text-[9px]"><div className="w-2.5 h-2.5 rounded-sm" style={{backgroundColor: seg.color}}></div><span className="font-bold text-slate-700">v{seg.v.replace('v','')}</span><span className="text-slate-400 font-mono">{seg.percent}%</span></div>))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 bg-white border border-slate-200 rounded-xl p-4 shadow-sm min-w-0">
+                                        <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex justify-between"><span>Node Structural Integrity</span><span className="text-slate-400 font-normal">{ACTIVE} nodes</span></div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {currentState.nodes.map(n => {
+                                                const hasSI = n.anomalies && (n.anomalies.includes('SCHEMA_ROTATION') || n.anomalies.includes('SCHEMA'));
+                                                const hasAny = n.anomalies && n.anomalies.length > 0;
+                                                const isSel = selectedSchemaLog && selectedSchemaLog.nodeId == n.node_id;
+                                                return (<div key={n.node_id} className="tooltip-trigger relative">
+                                                    <div className={`w-7 h-7 rounded-md ${hasSI ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]' : hasAny ? 'bg-yellow-400' : 'bg-green-400'} flex items-center justify-center text-[7px] font-bold text-white cursor-pointer transition-all duration-200 hover:scale-110 ${isSel ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}
+                                                         onClick={() => { const m = schemaLogs.find(l => l.nodeId == n.node_id); if (m) setSelectedSchemaLog(m); }}>
+                                                        {n.node_id.toString().slice(-2)}
+                                                    </div>
+                                                    <div className="tooltip-content absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-slate-900 text-white text-[8px] px-2 py-1 rounded font-mono whitespace-nowrap z-50">N-{n.node_id} | v{n.raw_telemetry?.schema_version || '?'} | Trust: {Math.round(n.trust_score)}</div>
+                                                </div>);
+                                            })}
+                                        </div>
+                                        <div className="flex gap-4 mt-3 text-[8px] font-bold text-slate-500 uppercase"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-green-400"></span> Valid</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-yellow-400"></span> Anomaly</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500"></span> Schema Breach</span></div>
+                                    </div>
+                                </div>
+
+                                {/* COMPACT ANOMALY TIMELINE */}
+                                <div className="px-5 pb-4 mt-auto">
+                                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                                        <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                            Anomaly Events Only <span className="text-slate-300 font-normal ml-1">({anomalyOnlyLogs.length})</span>
+                                        </div>
+                                        {anomalyOnlyLogs.length === 0 ? (
+                                            <div className="text-[10px] text-slate-400 italic text-center py-2">No structural anomalies detected. System nominal.</div>
+                                        ) : (
+                                            <div className="flex flex-wrap gap-2">
+                                                {anomalyOnlyLogs.map(log => (<div key={log.id} onClick={() => setSelectedSchemaLog(log)} className={`timeline-entry cursor-pointer flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-[9px] font-mono transition-all duration-200 ${log.color === 'red' ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100' : 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100'} ${selectedSchemaLog?.id === log.id ? 'ring-1 ring-blue-400' : ''}`}>
+                                                    <div className={`w-2 h-2 rounded-full shrink-0 ${log.color === 'red' ? 'bg-red-500' : 'bg-yellow-500'}`}></div>
+                                                    <span className="font-bold">N-{log.nodeId}</span>
+                                                    <span className="text-slate-400">{log.version}</span>
+                                                    <span className="font-bold">{log.color === 'red' ? 'MISMATCH' : 'ROTATION'}</span>
+                                                    {log.count > 1 && <span className="bg-slate-200 text-slate-600 px-1 rounded text-[7px] font-black">x{log.count}</span>}
+                                                </div>))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* RIGHT: STRUCTURAL DIFF PANEL */}
+                            <div className="w-[380px] border-l border-slate-200 bg-white flex flex-col shrink-0 overflow-hidden">
+                                {selectedSchemaLog ? (
+                                    <React.Fragment>
+                                    <div className="p-4 border-b border-slate-200 bg-slate-50/80 shrink-0">
+                                        <div className="flex justify-between items-start">
+                                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                                                <svg className="w-3.5 h-3.5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+                                                Structural Inspection
+                                            </div>
+                                            <button onClick={() => setSelectedSchemaLog(null)} className="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200 transition"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                                        </div>
+                                        <div className="flex items-end gap-3 mt-2">
+                                            <span className="text-xl font-black text-slate-800 font-mono">Node-{selectedSchemaLog.nodeId}</span>
+                                            <div className={`text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border ${(selectedSchemaLog.trust || 0) < 50 ? 'bg-red-600 text-white border-red-700' : (selectedSchemaLog.trust || 0) < 80 ? 'bg-amber-500 text-white border-amber-600' : 'bg-green-500 text-white border-green-600'}`}>
+                                                {(selectedSchemaLog.trust || 0) < 50 ? 'HIGH RISK' : (selectedSchemaLog.trust || 0) < 80 ? 'DEGRADED' : 'NOMINAL'}
+                                            </div>
+                                        </div>
+                                        <div className="text-[8px] text-slate-400 font-mono mt-1">{selectedSchemaLog.time} · {selectedSchemaLog.version}</div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 transparent'}}>
+                                        <div>
+                                            <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-2">Cross-Layer Verification</div>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
+                                                    <div className="text-[7px] text-slate-400 uppercase tracking-widest mb-1">HTTP L2</div>
+                                                    <div className={`text-base font-black font-mono ${selectedSchemaLog.raw?.http_status !== 200 ? 'text-red-500' : 'text-green-600'}`}>{selectedSchemaLog.raw?.http_status || '—'}</div>
+                                                </div>
+                                                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
+                                                    <div className="text-[7px] text-slate-400 uppercase tracking-widest mb-1">JSON L1</div>
+                                                    <div className={`text-[11px] font-bold font-mono ${selectedSchemaLog.raw?.json_payload?.status !== 'OPERATIONAL' ? 'text-red-500' : 'text-slate-700'}`}>{selectedSchemaLog.raw?.json_payload?.status || '—'}</div>
+                                                </div>
+                                                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-center">
+                                                    <div className="text-[7px] text-slate-400 uppercase tracking-widest mb-1">Schema L3</div>
+                                                    <div className="text-base font-black font-mono text-indigo-600">v{(selectedSchemaLog.raw?.schema_version || '?').toString().replace('v','')}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-2">Trust Impact</div>
+                                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                                                <div className="flex justify-between mb-1.5">
+                                                    <span className="text-[8px] text-slate-400 font-mono">0</span>
+                                                    <span className={`text-sm font-mono font-black ${(selectedSchemaLog.trust || 0) < 50 ? 'text-red-600' : (selectedSchemaLog.trust || 0) < 80 ? 'text-yellow-600' : 'text-green-600'}`}>{Math.round(selectedSchemaLog.trust || 0)}</span>
+                                                    <span className="text-[8px] text-slate-400 font-mono">100</span>
+                                                </div>
+                                                <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                                                    <div className="h-full rounded-full transition-all duration-500" style={{width: `${selectedSchemaLog.trust || 0}%`, background: (selectedSchemaLog.trust || 0) < 50 ? 'linear-gradient(90deg, #dc2626, #f87171)' : (selectedSchemaLog.trust || 0) < 80 ? 'linear-gradient(90deg, #ca8a04, #fbbf24)' : 'linear-gradient(90deg, #16a34a, #4ade80)'}}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {selectedSchemaLog.raw && (
+                                            <div>
+                                                <div className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+                                                    Structural Diff
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <div className="bg-[#f0fdf4] border border-green-200 rounded-lg p-3">
+                                                        <div className="text-[7px] font-bold text-green-600 uppercase tracking-widest mb-2">Expected Schema</div>
+                                                        <div className="font-mono text-[9px] text-green-800 space-y-1 leading-relaxed">
+                                                            <div><span className="text-green-500">node_id</span>: <span className="text-green-600">string</span></div>
+                                                            <div><span className="text-green-500">status</span>: <span className="text-green-600">string</span></div>
+                                                            <div><span className="text-green-500">{selectedSchemaLog.raw.schema_version == 2 ? 'latency_ms' : 'response_time_ms'}</span>: <span className="text-green-600">float</span></div>
+                                                            <div><span className="text-green-500">load_val</span>: <span className="text-green-600">float</span></div>
+                                                        </div>
+                                                    </div>
+                                                    <div className={`border rounded-lg p-3 ${selectedSchemaLog.color === 'red' ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                                        <div className={`text-[7px] font-bold uppercase tracking-widest mb-2 ${selectedSchemaLog.color === 'red' ? 'text-red-600' : 'text-slate-600'}`}>Received Payload</div>
+                                                        <div className="font-mono text-[9px] space-y-1 leading-relaxed">
+                                                            <div><span className="text-slate-500">node_id</span>: <span className="text-slate-700">{selectedSchemaLog.nodeId}</span></div>
+                                                            <div><span className="text-slate-500">status</span>: <span className="text-slate-700">{selectedSchemaLog.raw.json_payload?.status}</span></div>
+                                                            <div className={selectedSchemaLog.color === 'red' ? 'bg-red-200/60 px-1 -mx-1 rounded border-l-2 border-red-500' : ''}>
+                                                                <span className={selectedSchemaLog.color === 'red' ? 'text-red-700 font-bold' : 'text-slate-500'}>{selectedSchemaLog.raw.active_column}</span>: <span className={selectedSchemaLog.color === 'red' ? 'text-red-600 font-bold' : 'text-slate-700'}>{selectedSchemaLog.raw.json_payload?.[selectedSchemaLog.raw.active_column] || 'null'}</span>
+                                                                {selectedSchemaLog.color === 'red' && <span className="text-red-400 text-[7px] ml-1">← MUTATION</span>}
+                                                            </div>
+                                                            <div><span className="text-slate-500">load_val</span>: <span className="text-slate-700">{selectedSchemaLog.raw.json_payload?.load_val || 'null'}</span></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {selectedSchemaLog.color === 'red' && (
+                                                    <div className="mt-2 text-[8px] text-amber-600 bg-amber-50 p-2 rounded-lg border border-amber-200 font-bold tracking-wide">Payload quarantined — excluded from truth quorum reconstruction.</div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                    </React.Fragment>
+                                ) : (
+                                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400 p-6">
+                                        <svg className="w-16 h-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                                        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">No Node Selected</div>
+                                        <div className="text-[9px] text-slate-400 text-center">Click a node in the integrity grid or<br/>an event in the timeline to inspect</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        </div>
+                    </div>{/* end schema tab */}
