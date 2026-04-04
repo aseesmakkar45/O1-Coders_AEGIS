@@ -1,47 +1,148 @@
 # Detection Logic and Threat Mechanics
 
-AEGIS utilizes deterministic layers of rules and heuristics to classify anomalies. The core philosophy is **layered verification**: a node's reported status is never taken at face value. 
-
-This document details exactly how penalties are derived, scored, and escalated.
+AEGIS uses deterministic rule-based layers to classify anomalies and a graph-based machine learning pipeline to attribute the root cause. This document explains exactly how trust penalties are computed, how anomalies are classified, and how the Shadow Controller is mathematically convicted.
 
 ## Trust Score Mechanics
 
-Every node possesses an internal continuous `Trust Score`, floating between `0.0` and `100.0`. 
-When a node passes all heuristics cleanly for a sustained window (> 3.0 seconds), its trust recovers organically at a rate of `+2.0` per tick. 
-When heuristic layers identify breaches, immediate subtractive penalties are applied. 
+Every node maintains a continuous trust score between `0.0` and `100.0`, starting at `100.0`.
 
-| Anomaly Type | Trust Penalty | Severity Rating | Description |
-| :--- | :--- | :--- | :--- |
-| **IDENTITY_THEFT** | `-100` | **CRITICAL** | A hardware identity hash is broadcasting from an illegitimate node ID. |
-| **DDOS_ATTACK** | `-45 to -60` | **CRITICAL** | Massive latency spikes overlapping critically high system load volumes. |
-| **GHOST_NODE** | `-40 to -50` | **CRITICAL** | Transmission emanating from node IDs strictly outside the allowed registry parameters (> 500). |
-| **LATENCY_SPIKE** | `-15 to -25` | **MEDIUM** | Network deterioration exceeding 3-Sigma standard deviation norms. |
-| **SCHEMA_ROTATION**| `-10 to -15` | **MEDIUM** | The data schema shape unexpectedly shifted without orchestration. |
+**Penalty application:** When a verification layer detects a breach, the corresponding penalty is subtracted immediately. Multiple layers can trigger on the same event, but only the first matching anomaly type is recorded (priority order below).
 
-## Explaining The Layers
+**Trust recovery:** If a node passes all layers cleanly for a given tick AND its last anomaly was more than 3 ticks ago, it recovers +2.0 per tick, capped at 100.0. This prevents permanent false-positive damage while ensuring genuinely compromised nodes stay flagged.
 
-### 1. Identity Spoofing & Lateral Movement
-The most aggressive check in AEGIS (Layer 4). 
-Every payload contains a Base64 encoded identifier embedded inside the User-Agent. AEGIS decodes this upon ingestion. The `DatasetReconstructor` maintains a permanent ledger mapping `decoded_id -> node_id`. If a known Base64 identity suddenly broadcasts from a different `node_id`, it proves an attacker has moved horizontally across the microservices.
-**Action:** The new node's trust is instantly zeroed out. The system documents the physical traversal path (`source -> target`) for the incident API.
+### Anomaly Classification (Priority Order)
 
-### 2. Deceptive Telemetry Trapping
-Attackers hide failures by rigging the standard health checks to return nominal values.
-AEGIS constantly compares the application layer to the transport layer. If a node sends a `{"status": "OPERATIONAL"}` packet but the raw socket recorded an HTTP 500 network response, AEGIS detects the mask. It instantly labels the event as anomalous and registers the node as compromised.
+Events are evaluated in this exact order. The first condition met becomes the primary anomaly type:
 
-### 3. Exponential Response Time Validation
-AEGIS tracks latency dynamically, eliminating the need for hardcoded thresholds that become brittle under heavy traffic.
-The engine calculates an **Exponentially Weighted Moving Average (EWMA)** for every individual node:
-`ewma = (0.15 * current_ping) + (0.85 * ewma)`
-If a ping exceeds a $Z-Score > 3.0$ standard deviations above its personal norm, the mathematical anomaly is flagged. It is then correlated against CPU `load_val`. High load upgrades the threat to an L7 DDoS.
+| Anomaly Type | Penalty | Trigger Condition |
+| :--- | :--- | :--- |
+| **GHOST_NODE** | -40 to -50 | `node_id >= 500` — transmission from outside the registered node range |
+| **IDENTITY_THEFT** | -100 | The decoded Base64 identity was first registered by a different node — proves lateral movement |
+| **SCHEMA_ROTATION** | -10 to -15 | The schema version changed since this node's last event — potential evasion tactic |
+| **DDOS_ATTACK** | -45 to -60 | Latency Z-score > 3.0 AND system load > 85% — volumetric attack signature |
+| **LATENCY_SPIKE** | -15 to -25 | Latency Z-score > 3.0 AND system load ≤ 85% — network degradation without volumetric cause |
 
-### 4. Sleeper Cell Identification
-A "Sleeper Cell" is a node that is infected but deliberately keeping its footprint small to avoid tripping the trust zeroing thresholds.
-The AEGIS UI Engine evaluates the continuous trust score combined with active metrics. If a node is behaving erratically but hovering at a warning state (Trust < 80 but > 30) while reporting deceptive telemetry, the Temporal Heatmaps explicitly paint it in **Purple Infection Hues**, warning analysts of impending lateral expansion.
+### Severity Classification
 
-### 5. Patient Zero Synthesis
-If attacks cascade, alerts become useless noise. The `PatientZeroTracker` fixes this by digesting all anomalies continuously.
-1. It looks at all active alerts generated inside a `60-second` sliding window.
-2. It sorts them strictly by temporal origin.
-3. The Absolute Oldest node in an active cascading cluster is declared **Patient Zero**.
-4. The system calculates a confidence score based on cluster density, uniqueness, and the presence of cloned identities. 
+Severity labels are assigned for database logging based on raw penalty magnitude:
+- **CRITICAL:** penalty ≥ 45 (IDENTITY_THEFT, DDOS_ATTACK, GHOST_NODE)
+- **MEDIUM:** penalty ≥ 25
+- **LOW:** penalty > 0
+- **NORMAL_TRAFFIC:** penalty = 0
+
+## The Verification Layers
+
+### Layer 0: Ghost Node Trapping
+The simplest check. If a `node_id` is 500 or above, it falls outside the legitimate node registry. These are phantom transmissions — either from an attacker probing the network boundaries or a misconfigured service broadcasting on unauthorized channels.
+
+### Layer 1: Identity Verification and Lateral Movement
+The most aggressive check. Every telemetry payload contains a Base64-encoded identity string extracted from the user-agent during ingestion. The Reconstructor maintains a permanent ledger: `{decoded_id → first_seen_node_id}`.
+
+When a decoded identity is seen on a node that doesn't match the ledger entry, AEGIS concludes the identity was stolen. This is the strongest signal of lateral movement — an attacker has compromised one node and is using its credentials to operate from another.
+
+**What happens:**
+- The spoofing node receives a -100 trust penalty (instant zero-out).
+- A directed edge `(owner → thief)` is recorded in the GraphEngine with weight 1.2 (the highest possible edge weight).
+- The edge is permanent — it persists across sliding window rebuilds because identity theft edges are stored separately from temporal events.
+
+### Layer 2: Schema Evasion Detection
+Schema versions should change predictably and uniformly across a network. When a single node's schema version suddenly differs from its own previous heartbeat, it suggests the node is being manipulated to evade detection systems that rely on consistent data structures.
+
+The penalty is moderate (-10 to -15) because schema changes can occasionally be legitimate, but repeated rotations compound rapidly.
+
+### Layer 3: Latency and DDoS Detection
+AEGIS tracks latency dynamically, avoiding brittle hardcoded thresholds. For each node, it maintains an Exponentially Weighted Moving Average:
+
+```
+ewma = 0.15 × current_latency + 0.85 × previous_ewma
+```
+
+When the current latency's Z-score exceeds 3.0 standard deviations above the node's personal baseline, the anomaly is flagged. The system then checks `load_value` to distinguish between:
+- **DDOS_ATTACK** (load > 85%): The node is being overwhelmed by traffic volume.
+- **LATENCY_SPIKE** (load ≤ 85%): The node is degrading without a volumetric cause — potentially performing unauthorized computation.
+
+## Patient Zero Detection
+
+The `PatientZeroTracker` identifies the origin of cascading failures by clustering anomalies temporally.
+
+**Mechanism:**
+1. All anomalies are maintained in a 60-tick sliding window.
+2. If fewer than 2 anomalies are active, confidence decays by -3/tick. At 0, Patient Zero state clears.
+3. When ≥ 2 anomalies are active, the node with the oldest timestamp in the cluster is declared Patient Zero.
+
+**Confidence Scoring (max 100):**
+
+| Factor | Calculation | Max |
+| :--- | :--- | :--- |
+| Anomaly Volume | active_count × 10 | 40 |
+| Identity Theft Presence | +35 if any IDENTITY_THEFT in cluster | 35 |
+| Node Spread | unique_affected_nodes × 12 | 25 |
+
+Confidence smooths toward the target by at most +8/tick (rising) or -2/tick (falling), preventing erratic jumps that would confuse analysts.
+
+---
+
+## Shadow Controller Attribution
+
+Patient Zero tells you *where the fire started*. The Shadow Controller engine tells you *who lit the match*.
+
+### Graph Construction
+The `GraphEngine` maintains a deque of the last 200 anomaly events. Every tick, it rebuilds a directed `nx.DiGraph` from scratch:
+
+**Temporal causal edges:** If Node A triggered an anomaly at `log_id = T` and Node B triggered an anomaly at `log_id ∈ [T+1, T+3]`, an edge `A → B` is created. Weights decrease with distance:
+- Gap of 1: weight 1.0 (strongest causation)
+- Gap of 2: weight 0.7
+- Gap of 3: weight 0.5
+
+**Identity theft edges:** When identity spoofing is detected, an edge `owner → thief` is injected with weight 1.2 — the highest possible. These edges persist as long as the identity theft record exists.
+
+**What's NOT in the graph:** No co-occurrence edges (nodes failing at the same time don't get connected). No infinite accumulation (the 200-event window naturally drops old data). The graph represents only verified causal relationships.
+
+### Behavioral Fingerprinting
+The `FeatureEngine` computes a 5-dimensional vector per node from a rolling window of 50 events:
+
+1. **Average Latency** — Mean response time.
+2. **Average System Load** — Mean CPU/system load.
+3. **Error Rate** — Fraction of non-200 HTTP responses.
+4. **Inter-Arrival Variance** — Variance in time gaps between events. Low variance = bot-like precision.
+5. **Transition Entropy** — Shannon entropy of HTTP status code transitions. Low entropy = scripted communication loops.
+
+These vectors are fed into an **Isolation Forest** (contamination = 10%) for unsupervised anomaly detection. The output is inverted and normalized to [0, 1] — high scores indicate rigid, bot-like behavior consistent with C2 scripts.
+
+### The 5-Signal Attribution Formula
+
+```
+Score = 0.30 × Propagation
+      + 0.30 × Betweenness
+      + 0.10 × PageRank
+      + 0.10 × ML_Anomaly
+      + 0.05 × Frequency
+```
+
+All five signals are independently normalized to [0, 1] using safe min-max scaling. If all nodes have identical scores for a signal, everyone gets 0.5 (preventing division-by-zero artifacts).
+
+**Why closeness centrality is excluded:** Closeness measures how *close* a node is to all other nodes in the graph. While it's computed and reported in the breakdown for diagnostic purposes, proximity to the attack surface doesn't reliably indicate control. A node can be close to everything without causing anything. The formula deliberately favors signals that measure *outgoing influence* (Propagation) and *structural control* (Betweenness).
+
+### Stability Boost
+Shadow Controllers maintain persistent influence — they don't spike once and disappear. The engine tracks each node's PageRank over a 20-tick sliding window and computes variance:
+
+```
+stability = 1 / (variance + ε)
+stability_norm = 1 − e^(−stability × 0.1)
+final_score = score × (1 + 0.1 × stability_norm)
+```
+
+This rewards nodes with consistently high PageRank over time, penalizing transient anomaly bursts.
+
+### Dominance Boost
+If a node scores ≥ 0.7 in *both* Propagation and Betweenness, it receives a +0.05 tie-breaking bonus. This ensures the most structurally dominant node is definitively separated from close runners-up.
+
+### Confidence Metric
+The confidence of the #1 suspect is computed as the score gap between the top-ranked and second-ranked nodes, clamped to [0, 1]. A high confidence means the Shadow Controller stands clearly above the rest. A low confidence means multiple nodes share similar influence — the attribution is less certain.
+
+### Explainable Reasoning
+Each suspect receives a dynamically generated array of human-readable reasoning strings based on their signal scores. Examples:
+- "Primary propagation source — 85% of outgoing causal influence."
+- "Acts as a primary structural bridge for lateral movement."
+- "Highly rigid communication pattern (potential bot/C2 script)."
+- "Extremely stable temporal signature indicating long-term orchestration."

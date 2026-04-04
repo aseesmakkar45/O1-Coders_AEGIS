@@ -113,7 +113,7 @@ class DatasetReconstructor:
                 edge = (owner, node_id)
                 if edge not in self.propagation_graph:
                     self.propagation_graph.append(edge)
-                    self.attribution_engine.record_propagation(owner, node_id, current_time)
+                    self.attribution_engine.record_identity_edge(owner, node_id, current_time)
                     self.generated_logs.append(self.logger.emit(
                         str(node_id), "LATERAL_MOVEMENT", node.current_trust,
                         f"Stolen ID {decoded_id} from Node {owner}"
@@ -174,6 +174,8 @@ class DatasetReconstructor:
             self.tracker.log_anomaly(AnomalyEvent(
                 str(node_id), current_time, primary, int(penalty)
             ))
+            # Feed anomaly into graph sliding window
+            self.attribution_engine.record_anomaly(node_id, int(event.get("log_id", -1)))
 
         # ALWAY LOG TO HISTORY DB (Per User Request)
         primary_anomaly = anomaly_types[0] if anomaly_types else "NORMAL_TRAFFIC"
@@ -255,7 +257,7 @@ class DatasetReconstructor:
         # Build FRESH snapshots from live NodeState objects (not stale dicts)
         all_nodes = [self._build_node_snapshot(ns) for ns in self.nodes.values()]
 
-        self.attribution_engine.record_batch(events, self.tick_counter)
+
 
         active_nids = list(self.nodes.keys())
         if hasattr(self, 'killed_nodes'):

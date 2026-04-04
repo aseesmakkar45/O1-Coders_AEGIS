@@ -876,6 +876,15 @@
         const LatticeHeatmap = ({ data, onNodeSelect, pZero }) => {
             const { useMemo } = React;
 
+            // Compute shadow controller node from latest tick's attribution_suspects
+            const shadowNodeId = useMemo(() => {
+                if (!data || data.length === 0) return null;
+                const latestTick = data[data.length - 1];
+                const suspects = latestTick?.attribution_suspects || {};
+                const top = Object.values(suspects).sort((a, b) => b.final_score - a.final_score)[0];
+                return (top && top.final_score > 0.1) ? top.node_id : null;
+            }, [data]);
+
             const displayNodes = useMemo(() => {
                 if (!data || data.length === 0) return [];
                 const nodeMap = {};
@@ -900,11 +909,18 @@
 
             return (
                 <div className="w-full grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 p-4">
-                    {displayNodes.map(node => (
+                    {displayNodes.map(node => {
+                        const isPZ = String(node.id) === String(pZero);
+                        const isShadow = shadowNodeId !== null && String(node.id) === String(shadowNodeId) && !isPZ;
+                        let cardBorder = node.isInfected ? 'border-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'border-slate-200';
+                        if (isPZ) cardBorder = 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)] ring-1 ring-red-500 relative';
+                        if (isShadow) cardBorder = 'border-purple-500 shadow-[0_0_12px_rgba(147,51,234,0.6)] ring-1 ring-purple-500 relative';
+                        return (
                         <div key={node.id}
                             onClick={() => onNodeSelect && onNodeSelect(node.id)}
-                            className={`cursor-pointer bg-white border ${String(node.id) === String(pZero) ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)] ring-1 ring-red-500 relative' : node.isInfected ? 'border-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'border-slate-200'} p-3 rounded-xl flex flex-col gap-2 transition-all hover:border-blue-400 hover:shadow-md`}>
-                            {String(node.id) === String(pZero) && <div className="absolute -top-px -right-px bg-red-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-bl-lg rounded-tr-lg uppercase tracking-widest z-10">P-Zero</div>}
+                            className={`cursor-pointer bg-white border ${cardBorder} p-3 rounded-xl flex flex-col gap-2 transition-all hover:border-blue-400 hover:shadow-md`}>
+                            {isPZ && <div className="absolute -top-px -right-px bg-red-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-bl-lg rounded-tr-lg uppercase tracking-widest z-10">P-Zero</div>}
+                            {isShadow && <div className="absolute -top-px -right-px bg-purple-600 text-white text-[7px] font-black px-1.5 py-0.5 rounded-bl-lg rounded-tr-lg uppercase tracking-widest z-10 flex items-center gap-0.5"><svg className="w-2 h-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>Shadow</div>}
                             <div className="flex flex-col gap-1">
                                 <div className="flex justify-between items-center">
                                     <span className="text-[11px] font-bold text-slate-800">N-{node.id}</span>
@@ -927,7 +943,8 @@
                                 })}
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             );
         };
@@ -1933,26 +1950,54 @@
                         <div className="flex-1 overflow-y-auto p-4 space-y-4">
                             {leaderboard.length === 0 && <div className="text-center text-[11px] text-slate-500 mt-10">Waiting for graph formation...</div>}
                             
-                            {leaderboard.map((s, index) => (
-                                <div key={s.node_id} className={`bg-slate-800/80 border ${index === 0 ? 'border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.1)]' : 'border-slate-700/60'} p-4 rounded-xl relative overflow-hidden transition-all delay-75`}>
+                            {leaderboard.map((s, index) => {
+                                const confScore = s.final_score;
+                                const confLabel = confScore >= 0.6 ? 'HIGH' : confScore >= 0.35 ? 'MEDIUM' : 'LOW';
+                                const confColor = confScore >= 0.6 ? 'text-green-400 bg-green-500/10 border-green-500/30' : confScore >= 0.35 ? 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30' : 'text-red-400 bg-red-500/10 border-red-500/30';
+                                return (
+                                <div key={s.node_id} className={`bg-slate-800/80 border ${index === 0 ? 'border-purple-500/50 shadow-[0_0_20px_rgba(147,51,234,0.15)]' : 'border-slate-700/60'} p-4 rounded-xl relative overflow-hidden transition-all delay-75`}>
                                     {index === 0 && (
-                                        <div className="absolute top-0 right-0 bg-red-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-bl uppercase tracking-widest shadow-md">
-                                            #1 Controller
+                                        <div className="absolute top-0 right-0 bg-purple-600 text-white text-[8px] font-bold px-2.5 py-0.5 rounded-bl uppercase tracking-widest shadow-md flex items-center gap-1">
+                                            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                            Shadow Controller
                                         </div>
                                     )}
                                     <div className="flex justify-between items-center mb-3">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-6 h-6 rounded-full bg-slate-900 flex items-center justify-center border border-slate-700 font-bold text-slate-400 text-[10px]">#{index + 1}</div>
+                                            <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] ${index === 0 ? 'bg-purple-600/20 border border-purple-500 text-purple-300' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}>#{index + 1}</div>
                                             <span className={`text-[15px] font-black font-mono ${index === 0 ? 'text-white' : 'text-slate-300'}`}>N-{s.node_id}</span>
                                         </div>
-                                        <div className="text-[16px] font-bold font-mono text-[#00FFCC]">{(s.final_score * 100).toFixed(1)}% <span className="text-[9px] text-slate-500 font-sans uppercase">Threat</span></div>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${confColor}`}>Confidence: {confLabel}</span>
+                                        </div>
                                     </div>
+
+                                    {/* #1 gets prominent WHY callout */}
+                                    {index === 0 && (
+                                        <div className="bg-purple-950/40 border border-purple-500/30 rounded-lg p-3 mb-3">
+                                            <div className="text-[9px] font-bold uppercase tracking-widest text-purple-300 mb-2 flex items-center gap-1.5">
+                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                Why This Node?
+                                            </div>
+                                            <ul className="space-y-1.5">
+                                                <li className="text-[10px] text-slate-200 flex items-start gap-1.5 leading-snug">
+                                                    <span className="text-purple-400 mt-[1px] font-bold">→</span> Drives the majority of downstream anomalies across the network
+                                                </li>
+                                                <li className="text-[10px] text-slate-200 flex items-start gap-1.5 leading-snug">
+                                                    <span className="text-purple-400 mt-[1px] font-bold">→</span> Acts as the central structural bridge between affected nodes
+                                                </li>
+                                                <li className="text-[10px] text-slate-200 flex items-start gap-1.5 leading-snug">
+                                                    <span className="text-purple-400 mt-[1px] font-bold">→</span> Maintains stable, command-like behavioral pattern over time
+                                                </li>
+                                            </ul>
+                                        </div>
+                                    )}
                                     
                                     <div className="grid grid-cols-2 gap-4 mb-3">
                                         <div>
-                                            <BarComponent label="Influence" value={s.breakdown.pagerank} color="#3b82f6" />
+                                            <BarComponent label="Propagation" value={s.breakdown.propagation} color="#a855f7" />
+                                            <BarComponent label="Bridge" value={s.breakdown.betweenness} color="#3b82f6" />
                                             <BarComponent label="Anomaly" value={s.breakdown.anomaly} color="#ef4444" />
-                                            <BarComponent label="Centrality" value={s.breakdown.betweenness} color="#8b5cf6" />
                                         </div>
                                         <div className="flex flex-col justify-center">
                                             <div className="text-[8px] uppercase tracking-widest text-slate-500 mb-1">Temporal Stability</div>
@@ -1965,6 +2010,7 @@
                                     </div>
                                     
                                     <div className="bg-slate-900/60 rounded-lg p-2.5 border border-slate-700/50">
+                                        <div className="text-[7px] uppercase tracking-widest text-slate-500 mb-1.5">Engine Reasoning</div>
                                         <ul className="space-y-1.5">
                                             {s.reasoning.map((r, i) => (
                                                 <li key={i} className="text-[9px] text-slate-300 flex items-start gap-1.5 leading-tight">
@@ -1974,7 +2020,8 @@
                                         </ul>
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
@@ -2534,22 +2581,49 @@
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-6 text-[11px] font-semibold">
+                        <div className="flex items-center gap-4 text-[11px] font-semibold">
                             {/* STATUS - prominent */}
                             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md ${isUnderAttack ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'}`}>
                                 <div className={`w-2.5 h-2.5 rounded-full ${isUnderAttack ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
                                 <span className={`font-bold text-xs ${isUnderAttack ? 'text-red-700' : 'text-green-700'}`}>{isUnderAttack ? 'UNDER ATTACK' : 'SECURE'}</span>
                             </div>
 
-                            {/* P-ZERO - red badge */}
+                            {/* SHADOW CONTROLLER — PRIMARY badge, shown FIRST */}
+                            {(() => {
+                                const suspects = currentState.attribution_suspects || {};
+                                const topSuspect = Object.values(suspects)
+                                    .sort((a, b) => b.final_score - a.final_score)[0];
+                                if (topSuspect && topSuspect.final_score > 0.1) {
+                                    const score = topSuspect.final_score;
+                                    const confLabel = score >= 0.6 ? 'HIGH' : score >= 0.35 ? 'MEDIUM' : 'LOW';
+                                    const confColor = score >= 0.6 ? 'bg-green-400/20 text-green-300' : score >= 0.35 ? 'bg-yellow-400/20 text-yellow-300' : 'bg-red-400/20 text-red-300';
+                                    return (
+                                        <div className="flex items-center gap-2 bg-purple-800 text-white px-4 py-2 rounded-lg border border-purple-500/40 shadow-[0_0_12px_rgba(147,51,234,0.3)]">
+                                            <svg className="w-4 h-4 text-purple-300 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                            <div className="flex flex-col">
+                                                <span className="text-[8px] font-bold tracking-widest opacity-60 leading-none">SHADOW CONTROLLER</span>
+                                                <span className="font-black text-sm leading-tight font-mono">N-{topSuspect.node_id}</span>
+                                            </div>
+                                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${confColor}`}>{confLabel}</span>
+                                        </div>
+                                    );
+                                }
+                                return (
+                                    <div className="flex items-center gap-1.5 text-slate-400 px-3 py-1.5">
+                                        <svg className="w-3 h-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                        <span className="text-[9px] tracking-wide">SHADOW CTRL</span><span className="text-slate-300">{"\u2014"}</span>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* P-ZERO — secondary badge */}
                             {pZero && pZero.confidence > 0 ? (
-                                <div className="flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-md">
-                                    <span className="text-[9px] font-bold tracking-wide opacity-80">P-ZERO</span>
-                                    <span className="font-bold text-xs">Node {pZero.patient_zero_node}</span>
-                                    <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-mono">{pZero.confidence}%</span>
+                                <div className="flex items-center gap-1.5 bg-red-600/90 text-white px-2.5 py-1 rounded-md text-[10px]">
+                                    <span className="text-[8px] font-bold tracking-wide opacity-70">P-ZERO</span>
+                                    <span className="font-bold font-mono">N-{pZero.patient_zero_node}</span>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-1.5 text-slate-400">
+                                <div className="flex items-center gap-1.5 text-slate-400 text-[10px]">
                                     <span>P-ZERO</span><span className="text-slate-300">—</span>
                                 </div>
                             )}
@@ -2734,9 +2808,15 @@
 
                                         {/* Nodes */}
                                         <div className="absolute inset-0 z-20">
-                                            {currentState.nodes.map(node => {
+                                            {(() => {
+                                                const suspectsForMap = currentState.attribution_suspects || {};
+                                                const topSuspectForMap = Object.values(suspectsForMap)
+                                                    .sort((a, b) => b.final_score - a.final_score)[0];
+                                                const shadowNodeId = topSuspectForMap && topSuspectForMap.final_score > 0.1 ? topSuspectForMap.node_id : null;
+                                                return currentState.nodes.map(node => {
                                                 const pos = nodePositions[node.node_id] || { x: 50, y: 50 };
                                                 const isPZ = pZero && pZero.patient_zero_node === node.node_id && pZero.confidence > 0;
+                                                const isShadow = shadowNodeId !== null && node.node_id === shadowNodeId;
                                                 const isSafe = node.trust_score >= 80;
                                                 const isDangerous = node.trust_score < 50;
                                                 const isSelected = selectedNodeId === node.node_id;
@@ -2746,6 +2826,27 @@
                                                 let dotColor = '#22c55e';
                                                 if (isDangerous) dotColor = '#ef4444';
                                                 else if (!isSafe) dotColor = '#eab308';
+
+                                                // Dim healthy non-special nodes to push attacker into visual focus
+                                                const dimOpacity = (isSafe && !isPZ && !isShadow && !isSelected && !isHovered && !hasEdge) ? '0.45' : '1';
+
+                                                // Shadow Controller — purple glow highlight (like P-ZERO red)
+                                                if (isShadow && !isPZ) {
+                                                    return (
+                                                        <div key={node.node_id} className="absolute flex flex-col items-center cursor-pointer z-20"
+                                                            style={{ top: `${pos.y}%`, left: `${pos.x}%`, transform: 'translate(-50%,-50%)' }}
+                                                            onClick={() => setSelectedNodeId(node.node_id)}>
+                                                            <div className="absolute w-16 h-16 rounded-full border-2 border-purple-500/40 node-pulse"></div>
+                                                            <div className="absolute w-12 h-12 rounded-full border-2 border-purple-500" style={{boxShadow: '0 0 12px rgba(147,51,234,0.5)'}}></div>
+                                                            <div className="w-5 h-5 rounded-full bg-purple-600 border-2 border-purple-400 z-10"></div>
+                                                            <div className="absolute -top-9 bg-purple-700 text-white text-[7px] font-bold px-2 py-0.5 rounded tracking-widest uppercase whitespace-nowrap z-30">Shadow Controller</div>
+                                                            <div className="absolute top-full mt-1 z-30 whitespace-nowrap text-center">
+                                                                <div className="text-[9px] font-mono font-bold text-purple-300">N-{node.node_id}</div>
+                                                                <div className="text-[8px] font-mono text-purple-200">Trust: {Math.round(node.trust_score)}</div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
 
                                                 if (isPZ) {
                                                     return (
@@ -2767,7 +2868,7 @@
                                                 return (
                                                     <div key={node.node_id}
                                                         className={`absolute flex flex-col items-center cursor-pointer tooltip-trigger ${isSelected ? 'z-30' : ''}`}
-                                                        style={{ top: `${pos.y}%`, left: `${pos.x}%`, transform: 'translate(-50%,-50%)' }}
+                                                        style={{ top: `${pos.y}%`, left: `${pos.x}%`, transform: 'translate(-50%,-50%)', opacity: dimOpacity }}
                                                         onClick={() => setSelectedNodeId(node.node_id)}
                                                         onMouseEnter={() => setHoveredNodeId(node.node_id)}
                                                         onMouseLeave={() => setHoveredNodeId(null)}>
@@ -2800,7 +2901,8 @@
                                                         )}
                                                     </div>
                                                 );
-                                            })}
+                                            });
+                                            })()}
                                         </div>
 
                                         {/* Bottom-left stats */}

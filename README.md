@@ -1,58 +1,88 @@
 # AEGIS Defense System
 
-AEGIS is a startup-grade, real-time cyber-forensic analysis and anomaly detection platform. It is engineered to discard the concept of "trusted telemetry" by employing a mathematical, deterministic pipeline that exposes deceptive node behavior, identity theft, and latent performance cascades across distributed network architectures.
+**A real-time cyber-forensic attribution platform that reconstructs truth from deceptive telemetry and convicts the hidden Shadow Controller orchestrating network attacks.**
 
-![AEGIS Dashboard Header](https://via.placeholder.com/800x120?text=AEGIS+DEFENSE+SYSTEM)
+---
 
-## The Core Philosophy
+## The Problem
 
-Traditional monitoring tools (like Datadog or Splunk) are built to trust the inputs they are given. If a compromised microservice sends an `{"status": "OPERATIONAL"}` payload, the dashboard glows green, even if that service is silently dropping packets or rotating database schemas maliciously. 
+Modern distributed networks face a deceptively simple challenge: attackers don't just break things — they *lie about breaking them*. A compromised microservice can broadcast `{"status": "OPERATIONAL"}` to every monitoring dashboard while silently exfiltrating data, rotating database schemas, or spreading laterally through stolen credentials.
 
-**AEGIS assumes nothing.** 
+Standard monitoring tools — Datadog, Splunk, Prometheus — trust the telemetry they receive. When a node says it's healthy, the dashboard shows green. AEGIS was built because green dashboards kill networks.
 
-It cross-examines raw transport metrics against application-level JSON payloads. It maps underlying hardware Identity hashes (extracted from Base64 user agents) to establish a strict node registry. When telemetry lies, AEGIS immediately zeroizes the `Trust Score` and flags the **Deceptive Telemetry** attempt, logging the truth to an embedded persistent datastore before broadcasting the state to an immersive, real-time Command Center.
+## The Challenge
 
-## High-Fidelity Intelligence
+The Round 2 problem demands identifying a hidden **Shadow Controller** buried within legitimate network traffic. This isn't a loud attacker tripping alarms — it's a quiet orchestrator using other nodes as proxies, masking its influence behind layers of normal-looking API interactions. Finding it requires separating *correlation* from *causation*, and *symptoms* from *source*.
 
-AEGIS shifts the security paradigm from *symptom alerting* to *origin attribution*:
-- **Unmasking The Sleeper:** The system identifies nodes that are compromised but intentionally keeping their footprint small, rendering them visually distinct as "Sleeper Cells" before they spread.
-- **Isolating Patient Zero:** Using a cascading temporal heuristic, AEGIS tracks massive concurrent failure events (like DDoS waves or Identity spread) within a rigorous 60-second sliding window, mathematically drawing a direct vector to the exact node that initiated the sequence.
-- **Data Permanence:** The instantaneous dashboard state is perfectly mirrored by a rigorous SQLite backend logging structure, meaning every visual ping maps flawlessly to a row in an exportable historical CSV.
+## Our Approach
+
+AEGIS solves this in three stages:
+
+1. **Truth Reconstruction.** Every incoming telemetry event passes through a 4-layer verification pipeline that cross-examines HTTP transport codes against JSON application payloads, validates hardware identity via Base64 signature decoding, and detects schema manipulation. When the data lies, AEGIS catches it immediately and penalizes the node's trust score.
+
+2. **Causal Graph Construction.** Rather than correlating which nodes happen to fail at the same time, AEGIS builds a *directed causal graph* from a sliding window of 200 recent anomaly events. Edges are created only when there is strict temporal ordering (anomaly A precedes anomaly B by 1-3 log entries) or verified identity theft (Node X stole Node Y's credentials). The graph is rebuilt from scratch every 1.5 seconds — no stale edges, no accumulated noise.
+
+3. **Shadow Controller Attribution.** A 5-signal scoring engine fuses graph topology with behavioral machine learning to rank every node by its true influence:
+
+| Signal | Weight | What It Measures |
+| :--- | :--- | :--- |
+| **Propagation** | 30% | How many downstream anomalies this node *causes* |
+| **Betweenness Centrality** | 30% | Whether this node acts as the structural bridge for lateral movement |
+| **PageRank** | 10% | Downstream orchestration dominance across the full graph |
+| **ML Anomaly** | 10% | Rigid, bot-like communication patterns detected by Isolation Forest |
+| **Frequency** | 5% | Raw edge activity volume |
+
+Nodes that dominate both Propagation and Betweenness receive a deterministic tie-breaking boost. Temporal stability analysis rewards sustained orchestration over transient spikes.
+
+## The Result
+
+AEGIS produces a ranked list of suspects with the **#1 Shadow Controller** clearly identified, along with:
+- A confidence score measuring how distinctly it stands above the next suspect
+- Human-readable reasoning explaining *why* the system believes this node is the orchestrator
+- A full visual attack graph showing the causal propagation path
+- A simulated Kill Switch to model the network impact of quarantining the threat
 
 ## Architecture
 
-The system operates as a volatile state-machine built inside **Python & FastAPI**, driven by an asynchronous 1.5-second simulation loop. It relies on no external brokers (like Redis or Kafka), handling ingestion, memory-state reconstruction, SQLite writing, and WebSocket broadcasting sequentially on a single core. The frontend is a highly memoized **React & D3.js** interface orchestrating HTML5 Canvas elements for peak 60fps rendering.
+The system is a FastAPI monolith driven by a 1.5-second async simulation loop.
 
-## Documentation Suite
+**Backend:** Python 3.10, FastAPI, NetworkX, scikit-learn (IsolationForest), NumPy, SQLite3
+**Frontend:** React 18, D3.js, Chart.js, HTML5 Canvas, Tailwind CSS
+**Transport:** WebSocket (real-time) + REST (historical queries)
 
-The complete architectural reasoning, database schemas, and detection logic mechanics have been thoroughly indexed.
+## Documentation
 
-* [01_overview.md](docs/01_overview.md) — Executive summary and capabilities.
-* [02_problem_and_solution.md](docs/02_problem_and_solution.md) — The fundamental vulnerabilities AEGIS solves.
-* [03_system_architecture.md](docs/03_system_architecture.md) — Layered engineering specifications. 
-* [04_data_flow.md](docs/04_data_flow.md) — Pipeline progression from CSV ingestion to WebSocket dispatch.
-* [05_detection_logic.md](docs/05_detection_logic.md) — Trust scoring and anomaly deduction heuristic definitions.
-* [06_frontend_system.md](docs/06_frontend_system.md) — Dashboard component map and canvas strategies.
-* [07_backend_system.md](docs/07_backend_system.md) — NodeState dictionary mapping and API thread logic.
-* [08_database_design.md](docs/08_database_design.md) — Embedded SQLite schemas and debounce caps.
-* [09_api_and_realtime.md](docs/09_api_and_realtime.md) — Definition of REST routes and pure WebSocket payloads.
-* [10_consistency_model.md](docs/10_consistency_model.md) — Achieving zero-lag mathematical persistence.
-* [11_scalability_and_limits.md](docs/11_scalability_and_limits.md) — Technical load ceilings and logic windows.
-* [12_demo_flow.md](docs/12_demo_flow.md) — A step-by-step guide to showcasing AEGIS's power.
+| Document | Contents |
+| :--- | :--- |
+| [01_overview.md](docs/01_overview.md) | System capabilities and design philosophy |
+| [02_problem_and_solution.md](docs/02_problem_and_solution.md) | The vulnerabilities AEGIS addresses |
+| [03_system_architecture.md](docs/03_system_architecture.md) | Layered architecture with Attribution Engine details |
+| [04_data_flow.md](docs/04_data_flow.md) | Event lifecycle from CSV ingestion to WebSocket broadcast |
+| [05_detection_logic.md](docs/05_detection_logic.md) | Trust scoring, anomaly classification, and attribution formula |
+| [06_frontend_system.md](docs/06_frontend_system.md) | Dashboard views and rendering strategy |
+| [07_backend_system.md](docs/07_backend_system.md) | Module structure and execution model |
+| [08_database_design.md](docs/08_database_design.md) | SQLite schema, debouncing, and pruning |
+| [09_api_and_realtime.md](docs/09_api_and_realtime.md) | REST endpoints, attribution APIs, WebSocket payload |
+| [10_consistency_model.md](docs/10_consistency_model.md) | How live and historical data stay synchronized |
+| [11_scalability_and_limits.md](docs/11_scalability_and_limits.md) | Throughput ceilings and design assumptions |
+| [12_demo_flow.md](docs/12_demo_flow.md) | Step-by-step guide for live demonstrations |
 
-## Deployment
+## Quick Start
 
-**Live Demo:** [https://o1-coders-aegis-i30a.onrender.com](https://o1-coders-aegis-i30a.onrender.com)
-
-AEGIS is self-contained. 
 ```bash
-# 1. Install dependencies
+# 1. Create and activate environment
+conda create -n AEGIS python=3.10 -y
+conda activate AEGIS
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start the core simulation engine
+# 3. Launch the engine
 cd backend
 python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
-# 3. Access the Command Center
-Navigate to http://localhost:8000/
+# 4. Open the Command Center
+# http://localhost:8000
 ```
+
+**Live Demo:** [https://o1-coders-aegis-i30a.onrender.com](https://o1-coders-aegis-i30a.onrender.com)

@@ -199,7 +199,8 @@ def get_metrics():
     Purpose: Returns engine tracking metrics.
     """
     try:
-        edges = len(reconstructor.attribution_engine.graph_engine.edges)
+        ge = reconstructor.attribution_engine.graph_engine
+        edges = len(ge.event_window) + len(ge.identity_edges)
     except Exception:
         edges = len(reconstructor.propagation_graph)
         

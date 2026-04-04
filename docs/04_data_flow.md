@@ -1,46 +1,58 @@
 # Data Flow and State Progression
 
-Understanding AEGIS demands understanding the journey of a single piece of telemetry. AEGIS is fundamentally a deterministic pipeline. A row from a dataset is converted into an event, stripped of its obfuscation, penalized mathematically, logged permanently, and broadcast globally.
-
-This document maps the exact chronological flow of an event tick.
+Understanding AEGIS means understanding the journey of a single piece of telemetry — from a CSV row to a trust penalty to a Shadow Controller conviction to a pixel on the dashboard. This document traces that entire path.
 
 ## The Pipeline Lifecycle
 
-### Phase 1: Ingestion & Joining
-1. The global `asyncio` simulation loop triggers inside `main.py` every 1.5 seconds.
-2. It requests a batch of data via `streamer.get_batch()`.
-3. The `DatasetStreamer` reads the next 6 rows from `data.csv`.
-4. It cross-references `node_id` with `node_registry.csv` to fetch the raw User Agent.
-5. It decodes the Base64 signature embedded in the User Agent to establish the **hardware identity**.
-6. It maps the timeline to `schema_config.csv` to determine what schema version should be running right now.
-7. A complete, un-sanitized `event` dictionary is constructed.
+### Phase 1: Ingestion and Joining
+1. The `asyncio` simulation loop in `main.py` fires every 1.5 seconds.
+2. It calls `streamer.get_batch()`, which reads the next 6 rows from `system_logs.csv`.
+3. The streamer cross-references each `node_id` against `node_registry.csv` to fetch the raw User Agent string.
+4. It decodes the Base64 signature embedded in the User Agent to establish the node's **hardware identity**.
+5. It maps the event's timeline position against `schema_config.csv` to determine the expected schema version.
+6. A complete, un-sanitized `event` dictionary is constructed with all fields: `node_id`, `http_response_code`, `json_status`, `response_time_ms`, `load_value`, `decoded_id`, `schema_version`, `log_id`, and `is_infected`.
 
-### Phase 2: Reconstruction & Penalization
-1. The batch is passed immediately to `reconstructor.process_batch(events)`.
-2. For every event, the Engine requests the current memory-state of the node (`NodeState`).
-3. **Ghost Trap:** Is the `node_id >= 500` target threshold? If so, apply penalty.
-4. **Identity Check:** Does the decoded identity exist? Has this identity been seen on a different node before? If so, flag **IDENTITY_THEFT**, draw a propagation edge graph, apply severe penalty.
-5. **Schema Check:** Has the schema version unexpectedly mutated since the previous heartbeat? If so, flag **SCHEMA_ROTATION**, apply penalty.
-6. **Latency/DDoS Check:** Does the response time wildly exceed the active Exponentially Weighted Moving Average (EWMA)? If so, query the `load_val`. High load + High latency = **DDOS_ATTACK**. Normal load + High latency = **LATENCY_SPIKE**. Apply appropriate severity penalties.
-7. **Trust Calculation:** The severity penalties are subtracted from the node's rolling trust score (0 to 100). If no penalties occurred in the last 3000ms, the node naturally heals by `+2.0` trust.
+### Phase 2: Reconstruction and Trust Scoring
+1. The batch is passed to `reconstructor.process_batch(events)`.
+2. For each event, the Reconstructor retrieves (or creates) the node's `NodeState` from its in-memory dictionary.
+3. The event passes through four verification layers in priority order:
+   - **Ghost Node Trap:** Is `node_id >= 500`? If yes, apply -40 to -50 penalty.
+   - **Identity Check:** Does the `decoded_id` belong to a different node in the ownership ledger? If yes, flag IDENTITY_THEFT (-100 penalty), record an identity edge in the `GraphEngine`.
+   - **Schema Check:** Has the `schema_version` changed since this node's last event? If yes, flag SCHEMA_ROTATION (-10 to -15).
+   - **Latency/DDoS Check:** Is the Z-score of `response_time_ms` against the EWMA baseline > 3.0? If yes, check `load_value`. Above 0.85 = DDOS_ATTACK (-45 to -60). Below 0.85 = LATENCY_SPIKE (-15 to -25).
+4. **Trust Update:** Penalties are subtracted from the node's trust score (clamped to 0-100). If no penalties are applied and the last anomaly was more than 3 ticks ago, trust recovers by +2.0.
 
-### Phase 3: Persistence
-Every time a penalty is applied and trust drops:
-1. The event is mapped to a `"severity"` (LOW, MEDIUM, CRITICAL) based on the raw point drop.
-2. The Database Engine (`insert_incident`) validates the event against the debounce window (preventing 100 logs per second for the same latency spike on the same node).
-3. Allowed incidents are forcefully persisted directly into `INCIDENT_HISTORY`.
+### Phase 3: Attribution Pipeline
+When a penalty is applied during Phase 2, three things happen in parallel:
 
-### Phase 4: Cluster Synthesis
-1. All anomalies flagged during this tick are routed into the `PatientZeroTracker`.
-2. The Tracker dumps any anomaly older than 60 seconds.
-3. It recursively groups the events, finding the exact oldest event in the cluster.
-4. An origin, propagation list, and confidence score are finalized.
+1. **Graph Recording:** The anomaly event (`node_id`, `log_id`) is pushed into the `GraphEngine`'s sliding window deque (capacity: 200). Identity theft edges are recorded separately with high weight (1.2).
+2. **Feature Extraction:** The `FeatureEngine` updates the node's behavioral vector from the raw event telemetry (latency, load, HTTP status, tick time). This happens for *all* events, not just anomalous ones.
+3. **Patient Zero Tracking:** The anomaly is logged into the `PatientZeroTracker` for temporal cluster analysis.
 
-### Phase 5: Exfiltration & Rendering
-1. The `DatasetReconstructor` dumps its memory blocks back to JSON: converting every `NodeState` into a serializable snapshot.
-2. It attaches the global latency series, the Patient Zero cluster data, and the newly generated database logs.
-3. The FastApi router pushes this vast payload down the WebSocket pipe `await c.send_json(state)` to every dashboard connected.
-4. The React Frontend catches the payload.
-5. **Radar Map:** The frontend pulls the exact timestamp of the anomalies, mapping them geometrically to a 24-hour canvas circle.
-6. **Heatmap:** Nodes under 80% trust glow red or pulse purple (Sleepers). 
-7. The cycle completes. Exactly 1.5 seconds later, it fires again.
+At the end of `process_batch`, the `AttributionEngine.execute_attribution()` is called:
+- The `GraphEngine` rebuilds a fresh `nx.DiGraph` from its sliding window — temporal edges for anomalies within 1-3 log entries, plus identity theft edges.
+- Five signals are computed: Propagation (outgoing edge weight sum), Betweenness Centrality, PageRank, IsolationForest anomaly score, and Frequency (normalized degree).
+- Closeness Centrality is computed for diagnostic purposes but excluded from the final score.
+- Stability boosting is applied from PageRank variance history (20-tick window).
+- A dominance boost (+0.05) is applied to nodes scoring ≥0.7 in both Propagation and Betweenness.
+- The top-scoring node is identified as the Shadow Controller. A confidence metric (score gap between #1 and #2) is attached.
+
+### Phase 4: Persistence
+Every event — anomalous or normal — is logged to the SQLite `INCIDENT_HISTORY` table:
+1. A severity label is assigned: penalty ≥ 45 = CRITICAL, ≥ 25 = MEDIUM, > 0 = LOW, 0 = NORMAL_TRAFFIC.
+2. The debounce filter checks if an identical `(node_id, anomaly_type)` pair was logged within the last 2.0 seconds. If so, the write is skipped.
+3. The event is persisted with full telemetry: trust before/after, HTTP status, JSON status, schema version, decoded identity, and latency.
+
+### Phase 5: Patient Zero Synthesis
+1. The `PatientZeroTracker` prunes any anomaly older than 60 ticks from its active window.
+2. If at least 2 anomalies remain, it identifies Patient Zero as the node with the oldest timestamp in the cluster.
+3. A confidence score is computed from anomaly count (×10, max 40), identity theft presence (+35), and unique node spread (×12, max 25).
+4. Confidence smoothly approaches the target: max +8/tick when rising, max -2/tick when falling.
+5. If confidence reaches 0, the Patient Zero state clears entirely.
+
+### Phase 6: Broadcast
+1. The Reconstructor serializes its state: converting every `NodeState` into a JSON snapshot with trust scores, raw telemetry, decoded identity, infection status, and anomaly flags.
+2. It attaches: attribution suspects (with full breakdowns and reasoning), propagation graph edges (all + top 50 forensic edges), Patient Zero cluster data, latency/anomaly time series, attack vector counts, and the latest incident.
+3. FastAPI pushes this payload to every connected WebSocket client via `send_json`.
+4. The React frontend distributes the payload across six dashboard views.
+5. The cycle completes. 1.5 seconds later, it fires again.

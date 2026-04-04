@@ -1,61 +1,83 @@
 import networkx as nx
-import numpy as np
+from collections import deque
 
 class GraphEngine:
     """
-    Builds the graph and applies Exponential Temporal Decay on edges, applying normalization.
+    Builds a causal graph from a sliding window of recent anomaly events.
+    Graph is rebuilt from scratch each tick — no stale edges persist.
     """
-    def __init__(self, half_life_seconds):
-        self.half_life_seconds = half_life_seconds
-        self.lambda_ = np.log(2) / max(self.half_life_seconds, 1)
-        self.edges = {} # (src, tgt) -> [tick1, tick2, ...]
+    def __init__(self):
+        # Sliding window: only last 200 anomaly events
+        self.event_window = deque(maxlen=200)
+        # Identity theft edges: (owner, spoof_node) -> tick
+        self.identity_edges = {}
 
-    def record_propagation(self, source, target, tick):
-        edge = (source, target)
-        if edge not in self.edges:
-            self.edges[edge] = []
-        self.edges[edge].append(tick)
-        
+    def record_anomaly_event(self, node_id, log_id):
+        """Record an anomaly event into the sliding window."""
+        self.event_window.append({
+            "node_id": node_id,
+            "log_id": log_id
+        })
+
+    def record_identity_edge(self, owner, spoof_node, tick):
+        """Record a verified identity theft edge."""
+        self.identity_edges[(owner, spoof_node)] = tick
+
     def kill_node(self, node_id):
         node_id_int = int(node_id)
-        keys_to_delete = []
-        for src, tgt in self.edges.keys():
-            if src == node_id_int or tgt == node_id_int:
-                keys_to_delete.append((src, tgt))
+        # Remove from identity edges
+        keys_to_delete = [k for k in self.identity_edges if k[0] == node_id_int or k[1] == node_id_int]
         for k in keys_to_delete:
-            del self.edges[k]
-        print(f"[DEBUG] GraphEngine: Killed node {node_id_int}, removed {len(keys_to_delete)} edges")
-        
-    def record_transitions(self, events, current_tick):
-        window_size = 5
-        max_time_gap = 30
-        for i in range(len(events)):
-            for j in range(i + 1, min(i + window_size, len(events))):
-                node_a = events[i]["node_id"]
-                node_b = events[j]["node_id"]
-                
-                dt = j - i
-                if node_a != node_b and dt <= max_time_gap:
-                    self.record_propagation(node_a, node_b, current_tick)
-                    
+            del self.identity_edges[k]
+        # Remove from event window
+        self.event_window = deque(
+            (ev for ev in self.event_window if ev["node_id"] != node_id_int),
+            maxlen=200
+        )
+        print(f"[DEBUG] GraphEngine: Killed node {node_id_int}")
+
     def build_normalized_graph(self, current_tick):
+        """Rebuild graph from scratch using only the sliding window."""
         G = nx.DiGraph()
         raw_weights = {}
-        for edge, ticks in self.edges.items():
-            if len(ticks) == 0:
-                continue
-            # Weight = number of recorded transitions (edges persist forever, graph always grows)
-            weight = float(len(ticks))
-            raw_weights[edge] = weight
-                
-        if len(raw_weights) == 0:
+
+        # 1. Temporal causal edges from sliding window
+        window = list(self.event_window)
+        for i in range(len(window)):
+            ev_a = window[i]
+            for j in range(i + 1, len(window)):
+                ev_b = window[j]
+                gap = ev_b["log_id"] - ev_a["log_id"]
+                if gap < 1:
+                    continue
+                if gap > 3:
+                    break  # sorted by log_id via append order
+                if ev_a["node_id"] == ev_b["node_id"]:
+                    continue
+                # Fixed weights by gap
+                if gap == 1:
+                    weight = 1.0
+                elif gap == 2:
+                    weight = 0.7
+                else:
+                    weight = 0.5
+                edge = (ev_a["node_id"], ev_b["node_id"])
+                raw_weights[edge] = max(raw_weights.get(edge, 0), weight)
+
+        # 2. Identity theft edges
+        for (owner, spoof), tick in self.identity_edges.items():
+            edge = (owner, spoof)
+            raw_weights[edge] = max(raw_weights.get(edge, 0), 1.2)
+
+        if not raw_weights:
             return G
 
-        max_weight = max(raw_weights.values()) if raw_weights else 1.0
-        if max_weight == 0: max_weight = 1.0
-            
+        max_weight = max(raw_weights.values())
+        if max_weight == 0:
+            max_weight = 1.0
+
         for (src, tgt), w_raw in raw_weights.items():
             w_norm = w_raw / max_weight
             G.add_edge(src, tgt, weight=w_norm)
-                
+
         return G

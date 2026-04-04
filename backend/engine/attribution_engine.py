@@ -10,56 +10,66 @@ class AttributionEngine:
         from engine.graph_engine import GraphEngine
         
         self.feature_engine = FeatureEngine()
-        self.graph_engine = GraphEngine(self.config.half_life_seconds)
+        self.graph_engine = GraphEngine()
         self.pr_history = {} # node_id -> [pr1, pr2, ...]
 
     def record_event(self, node_id, event, current_tick):
         event["tick"] = current_tick
         self.feature_engine.extract_features(node_id, event)
 
-    def record_propagation(self, source, target, current_tick):
-        self.graph_engine.record_propagation(source, target, current_tick)
-        
-    def record_batch(self, events, current_tick):
-        self.graph_engine.record_transitions(events, current_tick)
+    def record_identity_edge(self, owner, spoof_node, current_tick):
+        self.graph_engine.record_identity_edge(owner, spoof_node, current_tick)
+
+    def record_anomaly(self, node_id, log_id):
+        self.graph_engine.record_anomaly_event(node_id, log_id)
         
     def execute_attribution(self, active_nodes, current_tick):
         G = self.graph_engine.build_normalized_graph(current_tick)
         if len(G) == 0 or len(active_nodes) < 2:
             return {}
-            
+
+        # --- Helper: safe min-max normalize to [0,1], fallback 0.5 if flat ---
+        def _safe_norm(raw_dict):
+            if not raw_dict:
+                return {}
+            vals = list(raw_dict.values())
+            mx, mn = max(vals), min(vals)
+            if mx == mn:
+                return {k: 0.5 for k in raw_dict}
+            return {k: (v - mn) / (mx - mn) for k, v in raw_dict.items()}
+
         # 1. PageRank
         try:
             pr_raw = nx.pagerank(G, alpha=self.config.pr_alpha, weight='weight', max_iter=self.config.pr_max_iter, tol=self.config.pr_tol)
-            pr_vals = list(pr_raw.values())
-            max_pr = max(pr_vals) if pr_vals else 1.0
-            min_pr = min(pr_vals) if pr_vals else 0.0
-            pr_norm_dict = {}
-            for k, v in pr_raw.items():
-                denom = (max_pr - min_pr) if (max_pr - min_pr) != 0 else 1e-6
-                pr_norm_dict[k] = (v - min_pr) / denom
         except Exception:
-            pr_norm_dict = {}
+            pr_raw = {}
+        pr_norm_dict = _safe_norm(pr_raw)
 
-        # 2. Betweenness
+        # 2. Betweenness Centrality
         try:
             G_dist = G.copy()
             for u, v, d in G_dist.edges(data=True):
                 w = d.get('weight', 0.1)
                 d['distance'] = 1.0 / w if w > 0 else 10.0
             bc_raw = nx.betweenness_centrality(G_dist, weight='distance')
-            
-            bc_vals = list(bc_raw.values())
-            max_bc = max(bc_vals) if bc_vals else 1.0
-            min_bc = min(bc_vals) if bc_vals else 0.0
-            bc_norm_dict = {}
-            for k, v in bc_raw.items():
-                denom = (max_bc - min_bc) if (max_bc - min_bc) != 0 else 1e-6
-                bc_norm_dict[k] = (v - min_bc) / denom
         except Exception:
-            bc_norm_dict = {}
-            
-        # 3. Behavioral Anomaly
+            bc_raw = {}
+        bc_norm_dict = _safe_norm(bc_raw)
+
+        # 3. Closeness Centrality (new signal)
+        try:
+            cc_raw = nx.closeness_centrality(G, distance='weight')
+        except Exception:
+            cc_raw = {}
+        cc_norm_dict = _safe_norm(cc_raw)
+
+        # 4. Propagation Score (new signal) — sum of outgoing edge weights per node
+        prop_raw = {}
+        for node in G.nodes():
+            prop_raw[node] = sum(d.get('weight', 0) for _, _, d in G.out_edges(node, data=True))
+        prop_norm_dict = _safe_norm(prop_raw)
+
+        # 5. Behavioral Anomaly (Isolation Forest — unchanged)
         X = []
         node_order = []
         for n in active_nodes:
@@ -67,7 +77,7 @@ class AttributionEngine:
             node_order.append(n)
             
         anomaly_scores = {}
-        if len(X) >= 2: # Need enough for Isolation Forest properly? >0 actually
+        if len(X) >= 2:
             try:
                 clf = IsolationForest(contamination=0.1, random_state=42)
                 X_np = np.array(X)
@@ -76,29 +86,33 @@ class AttributionEngine:
                 
                 max_score = np.max(raw_scores)
                 min_score = np.min(raw_scores)
-                denom = (max_score - min_score) if (max_score - min_score) != 0 else 1e-6
-                norm_scores = (raw_scores - min_score) / denom
-                final_anomaly = 1.0 - norm_scores
+                if max_score == min_score:
+                    final_anomaly = np.full_like(raw_scores, 0.5)
+                else:
+                    norm_scores = (raw_scores - min_score) / (max_score - min_score)
+                    final_anomaly = 1.0 - norm_scores
                 
                 for i, n in enumerate(node_order):
                     anomaly_scores[n] = final_anomaly[i]
             except Exception:
                 pass
                 
-        # 4. Frequency Score & Stability
+        # 6. Frequency Score (unchanged)
         total_graph_weight = sum(d['weight'] for u, v, d in G.edges(data=True)) or 1.0
         
         results = {}
         for node in G.nodes():
             pr_norm = pr_norm_dict.get(node, 0.0)
             bc_norm = bc_norm_dict.get(node, 0.0)
+            cc_norm = cc_norm_dict.get(node, 0.0)
+            prop_norm = prop_norm_dict.get(node, 0.0)
             iso_score = anomaly_scores.get(node, 0.0)
             
             in_deg = G.in_degree(node, weight='weight')
             out_deg = G.out_degree(node, weight='weight')
             fs = (in_deg + out_deg) / total_graph_weight
             
-            # Stability
+            # Stability (unchanged)
             if node not in self.pr_history:
                 self.pr_history[node] = []
             self.pr_history[node].append(pr_norm)
@@ -109,19 +123,28 @@ class AttributionEngine:
             stability = 1.0 / (variance + 1e-6)
             stability_norm = 1.0 - np.exp(-stability * 0.1) 
             
-            final_score = (self.config.alpha * pr_norm) + \
+            # Final 5-signal formula (closeness excluded — proximity ≠ control)
+            final_score = (self.config.w_propagation * prop_norm) + \
                           (self.config.beta * bc_norm) + \
+                          (self.config.alpha * pr_norm) + \
                           (self.config.gamma * iso_score) + \
                           (self.config.delta * fs)
                           
-            # Boost
+            # Stability boost (unchanged)
             final_score = min(1.0, final_score * (1.0 + 0.1 * stability_norm))
 
+            # Dominance boost: deterministic tie-breaker for nodes dominant in BOTH
+            # primary causal signals (propagation AND betweenness)
+            if prop_norm >= 0.7 and bc_norm >= 0.7:
+                final_score = min(1.0, final_score + self.config.dominance_boost)
+
             reasoning = []
+            if prop_norm > 0.6: reasoning.append(f"Primary propagation source — {int(prop_norm * 100)}% of outgoing causal influence.")
             if pr_norm > 0.6: reasoning.append(f"Dominates ~{int(pr_norm * 100)}% of downstream network influence.")
             elif pr_norm > 0.3: reasoning.append(f"Moderately influences downstream nodes (~{int(pr_norm * 100)}% flow).")
             
             if bc_norm > 0.6: reasoning.append("Acts as a primary structural bridge for lateral movement.")
+
             
             if iso_score > 0.6: reasoning.append("Highly rigid communication pattern (potential bot/C2 script).")
             
@@ -133,8 +156,10 @@ class AttributionEngine:
                 "node_id": int(node),
                 "final_score": round(float(final_score), 3),
                 "breakdown": {
-                    "pagerank": round(float(pr_norm), 3),
+                    "propagation": round(float(prop_norm), 3),
                     "betweenness": round(float(bc_norm), 3),
+                    "centrality": round(float(cc_norm), 3),
+                    "pagerank": round(float(pr_norm), 3),
                     "anomaly": round(float(iso_score), 3),
                     "frequency": round(float(fs), 3),
                     "stability": round(float(stability_norm), 3)
@@ -142,4 +167,12 @@ class AttributionEngine:
                 "reasoning": reasoning
             }
             
+        # Confidence: score gap between #1 and #2 suspect, clamped to [0, 1]
+        if len(results) >= 2:
+            ranked = sorted(results.values(), key=lambda x: x['final_score'], reverse=True)
+            confidence = ranked[0]['final_score'] - ranked[1]['final_score']
+            confidence = max(0.0, min(1.0, confidence))
+            results[ranked[0]['node_id']]['confidence'] = round(confidence, 3)
+
         return results
+

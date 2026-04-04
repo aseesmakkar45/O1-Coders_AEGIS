@@ -6,16 +6,19 @@ class AttributionConfig:
     Adjusting these safely morphs the behavior of the entire underlying topological calculation.
     """
     
-    # 1. Temporal Constraints
-    # Increased half-life to 10 hours so edges never vanish and the graph accumulates!
-    half_life_seconds = 36000 
-    lambda_ = np.log(2) / half_life_seconds
+    # 1. Graph Temporal Model
+    # Graph is rebuilt from a pure sliding window (last 200 events) each tick.
+    # No time-based decay is applied — edge weights are purely causal (gap-based).
+    # This ensures zero historical leakage: only recent events influence attribution.
 
-    # 2. Final Attribution Consensus Weighting
-    alpha = 0.4  # PageRank - Identifies heavily orchestrated Command hubs.
-    beta = 0.3   # Betweenness Centrality - Identifies structural proxy bridges resolving internal logic.
-    gamma = 0.2  # Behavioral Anomaly - Score synthesized from IsolationForest telemetry vector mappings.
-    delta = 0.1  # Normalized Frequency - General activity bounds tracking degree connectivity.
+    # 2. Final Attribution Consensus Weighting (5-signal — closeness excluded from scoring)
+    w_propagation = 0.30  # Propagation Score — Primary causal outgoing influence.
+    beta = 0.30           # Betweenness Centrality — Structural bridge for lateral movement.
+    w_centrality = 0.00   # Closeness Centrality — EXCLUDED: proximity ≠ control.
+    alpha = 0.10          # PageRank — Downstream orchestration dominance.
+    gamma = 0.10          # Behavioral Anomaly — IsolationForest telemetry fingerprint.
+    delta = 0.05          # Normalized Frequency — General activity volume.
+    dominance_boost = 0.05  # Tie-breaker for nodes dominant in both propagation and betweenness.
 
     # 3. Solver Constraints
     # Ensures deterministic mathematical convergence even when solving ultra-sparse isolated botnet chains.

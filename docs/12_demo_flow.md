@@ -1,38 +1,67 @@
 # Demonstration Flow
 
-The AEGIS Defense System is designed to be demonstrated as a living, volatile environment. To effectively showcase the capabilities of the system to judges, investors, or stakeholders, follow this structured narrative.
+This guide walks through a structured demonstration of AEGIS for judges, stakeholders, or technical reviewers. The narrative is designed to build from baseline normalcy through attack detection to Shadow Controller conviction — showing the full depth of the system in under 5 minutes.
 
-## Preparation
-1. Ensure the Python FastAPI process (`main.py`) is actively running.
-2. Open exactly one browser tab to `http://localhost:8000`. 
-3. *Note:* Opening the tab automatically triggers a server-side state reset. The engine wipes its dataset cursor back to `0`, ensuring the demonstration always begins in a clean, nominal state.
+## Setup
 
-## Phase 1: The Baseline
-**The Goal: Establish what "normal" looks like.**
-- Direct attention to the **Radar Map**. Explain that time is running linearly around the 24-hour radius. Active green dots indicate healthy heartbeats arriving via WebSockets.
-- Direct attention to the **Diagnostic Node Heatmap**. The green tiles assure the audience that all systems are functionally perfect. Mention that typical monitoring tools stop at this depth.
+1. Start the backend: `cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000`
+2. Wait for `Application startup complete.` in the terminal.
+3. Open one browser tab to `http://localhost:8000`.
+4. Opening the tab automatically triggers a server-side reset — the dataset cursor jumps to position 0 and all engine state is wiped, ensuring a clean start every time.
+5. Toggle **Dark Mode** via the top-right button for the full command interface aesthetic.
 
-## Phase 2: Detecting the Invisible (The Sleeper Cell)
-**The Goal: Show AEGIS unmasking deceptive telemetry.**
-- Without touching any controls, wait for the engine to hit the first major dataset shift (usually within the first 60 seconds).
-- Point to the **Heatmap**. Certain nodes will begin to transition into a pulsating **Purple** hue. 
-- Explain: *"These nodes are Sleeper Cells. They are actively sending back JSON payloads reading `{"status": "OPERATIONAL"}` to bypass standard alerting thresholds. However, AEGIS's multi-layered pipeline has caught them failing underlying HTTP checks. Their trust score is dropping, but they aren't critical yet."*
+## Phase 1: The Baseline (~30 seconds)
 
-## Phase 3: The Outbreak & Patient Zero
-**The Goal: Demonstrate advanced heuristic clustering and identity verification.**
-- Use the **Executive Control Panel** at the top of the UI.
-- Click the **IDENTITY THEFT** or **LATENCY SPIKE** scenario trigger.
-- **The Execution:** This API request (`/api/seek_event/...`) jumps the dataset forward exactly to a mathematically confirmed attack window and initiates an `ANOMALY_BURST`.
-- Watch the **Constellation Map** closely. As the burst hits the engine, SVG lines will geometrically draw themselves across nodes.
-- Explain: *"An attacker is cloning hardware identities to move laterally across our isolated nodes. Watch the Constellation map track the physical spread in real-time."*
-- Quickly observe the **Radar Map**. A massive glowing dash-ring will instantly materialize around a specific radius.
-- Explain: *"The system has engaged its 60-second sliding window tracker. It has mathematically isolated the exact origin node responsible for the entire cascade. That dashed orange line is Patient Zero."*
+**Goal:** Establish what a healthy network looks like under AEGIS monitoring.
 
-## Phase 4: Forensic Permanence
-**The Goal: Show that the visual interface is backed by hard, irrefutable truth.**
-- Click the **EXPORT LOGS** control.
-- Open the resulting CSV.
-- Show the stakeholder that the visual outbreak they just witnessed on the sleek graphs exists perfectly documented in a granular, highly auditable database format. Point out the severe trust drops, the exact Base64 identity hashes, and the specific anomaly classification flags matching exactly what was shown on the dashboard. 
+- Start on the **Overview Tab**. The system status shows NOMINAL. Nodes are appearing on the Forensic Radar Map as green dots.
+- Point out the live node counter ticking upward as telemetry streams in at 6 events per 1.5-second tick.
+- Switch briefly to the **Analytics Tab**. The Trust Deviation chart is entirely green. The Live Intelligence Stream shows orderly `NORMAL` traffic with healthy HTTP 200 responses and low latency.
+- Key message: *"This is AEGIS processing legitimate traffic. Every event is being verified across four independent layers — identity, schema, transport, and application. Right now, everything checks out."*
 
-## Conclusion
-Conclude the demonstration by emphasizing that AEGIS is not an alert-forwarding mechanism. It is a mathematical truth engine that verifies integrity, establishes hardware identity, and permanently logs the progression of cyber attacks.
+## Phase 2: Attack Detection (~60-90 seconds in)
+
+**Goal:** Show AEGIS catching deceptive telemetry and identity theft in real time.
+
+- Return to the **Overview Tab**. Within the first minute, the dataset's embedded attack sequences will trigger automatically.
+- Watch for the system status to flip to **UNDER ATTACK**. The Patient Zero badge will appear in the header with a rising confidence percentage.
+- On the Radar Map, compromised nodes appear as red and purple dots. Propagation edges become visible, connecting infected nodes to their sources.
+- The attack vector counters start incrementing — IDENTITY_THEFT, LATENCY_SPIKE, SCHEMA_ROTATION.
+- Key message: *"An attacker has breached the network. They're sending fake 'OPERATIONAL' payloads to trick standard monitoring tools, but AEGIS caught the HTTP failures underneath. It's also detected identity theft — one node is using stolen credentials from another — and mapped the actual infection path."*
+
+## Phase 3: The Shadow Controller Reveal
+
+**Goal:** Demonstrate that AEGIS goes beyond Patient Zero to find the true orchestrator.
+
+- Click the **Shadow Control** tab in the left navigation.
+- The D3 force-directed attack graph will render, showing the causal topology with nodes sized by threat score.
+- The **#1 Shadow Controller** node will be highlighted with a pulsing red glow and a "Suspected Command Node" label.
+- Draw attention to the **Top Attack Suspects** panel on the right:
+  - The #1 suspect has a purple "Shadow Controller" badge.
+  - The **"Why This Node?"** callout explains in plain language why this node was convicted.
+  - The signal breakdown bars show Propagation, Bridge (Betweenness), and Anomaly scores.
+  - The **Engine Reasoning** section provides specific explanations like *"Primary propagation source — 85% of outgoing causal influence"* and *"Acts as a primary structural bridge for lateral movement."*
+- Key message: *"Standard tools stop at Patient Zero — the first node to fail. AEGIS deploys a 5-signal attribution engine over a causal graph built from verified temporal sequences and identity theft edges. It identifies the node that is orchestrating the attack, not just the loudest victim."*
+
+## Phase 4: Kill Switch Demonstration (Optional)
+
+**Goal:** Show the interactive threat response capability.
+
+- Click on the #1 suspect node in the attack graph.
+- A detail panel appears with an **"INITIATE KILL SWITCH"** button.
+- Click it. The node is removed from the graph engine, simulating quarantine.
+- Observe how the threat topology reorganizes — remaining suspects shift in ranking, and the "Network Influence Reduced" banner confirms the impact.
+- Key message: *"AEGIS doesn't just detect — it lets analysts model the impact of quarantine actions before executing them. Removing the Shadow Controller visibly degrades the attack graph's structure."*
+
+## Phase 5: Forensic Permanence
+
+**Goal:** Prove that the visual findings are backed by hard, queryable data.
+
+- Click the **HISTORY** button in the top header bar. The forensic ledger opens.
+- Show the paginated incident log — every event that was flagged on the dashboard exists here with full metadata: exact timestamps, trust before/after deltas, HTTP codes, decoded identity hashes, schema versions, and severity classifications.
+- Apply filters (severity: CRITICAL, or node_id of the Shadow Controller) to demonstrate targeted forensic queries.
+- Key message: *"Everything we just saw on the live dashboard is permanently recorded in an embedded SQLite database. The visual outbreak and the forensic log are mathematically identical — they come from the same computation path. This data is exportable as CSV for external analysis."*
+
+## Closing Statement
+
+*"AEGIS is not an alert-forwarding mechanism. It's a mathematical truth engine that verifies telemetry integrity, enforces hardware identity, constructs causal attack graphs, and attributes coordinated attacks to their true source — the Shadow Controller — with full explainable reasoning. Everything displayed in the command interface is backed by persistent, auditable forensic data."*
