@@ -55,7 +55,7 @@ class DatasetStreamer:
                 })
 
         # Load curated system logs
-        logs_path = os.path.join(DATA_DIR, "data.csv")
+        logs_path = os.path.join(DATA_DIR, "system_logs.csv")
         with open(logs_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -99,8 +99,8 @@ class DatasetStreamer:
     def get_batch(self) -> List[Dict]:
         """Get next batch of events from dataset. Loops when exhausted."""
         if self.cursor >= len(self.logs):
-            self.cursor = 0  # Loop dataset
-
+            return []  # Stop streaming at 10,000 instead of looping
+            
         end = min(self.cursor + self.batch_size, len(self.logs))
         batch = self.logs[self.cursor:end]
         self.cursor = end

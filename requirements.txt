@@ -3,3 +3,7 @@ uvicorn
 websockets
 pydantic
 python-multipart
+numpy
+networkx
+scikit-learn
+scipy

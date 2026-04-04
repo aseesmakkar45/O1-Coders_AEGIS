@@ -1149,6 +1149,11 @@
                 let trust = 0;
 
                 history.forEach((tick, tickIdx) => {
+                    // CRITICAL FIX: Only sample telemetry when the node ACTUALLY emitted an event in this tick.
+                    // Otherwise, we get massive duplication which obliterates the rolling Z-Score variance.
+                    const hadEvent = (tick.tick_events || []).some(te => String(te.node_id) === String(nodeId));
+                    if (!hadEvent) return;
+
                     (tick.nodes || []).forEach(n => {
                         if (String(n.node_id) === String(nodeId)) {
                             trust = n.trust_score || 0;
@@ -1377,7 +1382,10 @@
                         <path d={latAreaGenerator(visiblePts)} fill="#3b82f6" fillOpacity="0.1" />
                         <path d={latLineGenerator(visiblePts)} fill="none" stroke="#3b82f6" strokeWidth="1.5" />
                         {visiblePts.map((p, i) => (
-                            <circle key={`lat-${i}`} cx={xScale(p.rAt)} cy={latScale(p.response_time_ms)} r="2.5" fill={p.response_time_ms > latScale.domain()[1] * 0.8 ? "#ef4444" : "#3b82f6"} stroke="white" strokeWidth="1" />
+                            <g key={`lat-${i}`}>
+                                <circle cx={xScale(p.rAt)} cy={latScale(p.response_time_ms)} r="2.5" fill={p.response_time_ms > latScale.domain()[1] * 0.8 ? "#ef4444" : "#3b82f6"} stroke="white" strokeWidth="1" />
+                                <text x={xScale(p.rAt)} y={latScale(p.response_time_ms) - 8} fontSize="8" fill={p.response_time_ms > latScale.domain()[1] * 0.8 ? "#ef4444" : "#64748b"} textAnchor="middle" fontWeight="bold">{Math.round(p.response_time_ms)}ms</text>
+                            </g>
                         ))}
                     </RenderChart>
 
@@ -1397,7 +1405,10 @@
                         })}
 
                         {visiblePts.map((p, i) => (
-                            <circle key={`z-${i}`} cx={xScale(p.rAt)} cy={zScale(p.Z)} r="2.5" fill={p.Z > 2.5 ? "#9333ea" : "#64748b"} stroke="white" strokeWidth="1" />
+                            <g key={`z-${i}`}>
+                                <circle cx={xScale(p.rAt)} cy={zScale(p.Z)} r="2.5" fill={p.Z > 2.5 ? "#9333ea" : "#64748b"} stroke="white" strokeWidth="1" />
+                                <text x={xScale(p.rAt)} y={zScale(p.Z) - 8} fontSize="8" fill={p.Z > 2.5 ? "#9333ea" : "#64748b"} textAnchor="middle" fontWeight="bold">{p.Z.toFixed(1)}σ</text>
+                            </g>
                         ))}
                     </RenderChart>
 
@@ -1430,7 +1441,10 @@
                         <line x1="0" y1={loadScale(0.7)} x2={W} y2={loadScale(0.7)} stroke="#ef4444" strokeWidth="1" strokeDasharray="3 3" opacity="0.4" />
                         <path d={loadLineGenerator(visiblePts)} fill="none" stroke="#3b82f6" strokeWidth="1.5" />
                         {visiblePts.map((p, i) => (
-                            <circle key={`ld-${i}`} cx={xScale(p.rAt)} cy={loadScale(p.L)} r="2.5" fill={p.L > 0.7 ? "#ef4444" : "#3b82f6"} stroke="white" strokeWidth="1" />
+                            <g key={`ld-${i}`}>
+                                <circle cx={xScale(p.rAt)} cy={loadScale(p.L)} r="2.5" fill={p.L > 0.7 ? "#ef4444" : "#3b82f6"} stroke="white" strokeWidth="1" />
+                                <text x={xScale(p.rAt)} y={loadScale(p.L) - 8} fontSize="8" fill={p.L > 0.7 ? "#ef4444" : "#64748b"} textAnchor="middle" fontWeight="bold">{Math.round(p.L * 100)}%</text>
+                            </g>
                         ))}
                     </RenderChart>
                 </div>
@@ -1529,6 +1543,444 @@
             return { history, datasetPos, latencySeries, anomalySeries, attackVectors, latestIncident, sessionStart: sessionStartRef.current };
         }
 
+        // ===== SHADOW CONTROLLER MAP COMPONENT =====
+        function ShadowControllerMap({ currentState, killedNodes, setKilledNodes }) {
+            const svgRef = React.useRef();
+            const layoutStateRef = React.useRef(new Map());
+            const [selectedNode, setSelectedNode] = React.useState(null);
+
+            React.useEffect(() => {
+                if (!currentState || !currentState.propagation_graph || !currentState.attribution_suspects) return;
+
+                let simulation, timer;
+                try {
+                    const suspectsObj = currentState.attribution_suspects || {};
+                    const topNodes = Object.values(suspectsObj)
+                        .filter(s => !killedNodes.has(String(s.node_id)))
+                        .sort((a,b) => b.final_score - a.final_score);
+                    
+                    const highestScoreNodeId = topNodes.length > 0 ? String(topNodes[0].node_id) : null;
+                    const pZeroId = currentState.patient_zero && currentState.patient_zero.confidence > 0 ? String(currentState.patient_zero.patient_zero_node) : null;
+
+                    const nodes = [];
+                    const links = [];
+                    
+                    const nodeSet = new Set();
+                    currentState.propagation_graph.forEach(e => {
+                        nodeSet.add(e.source);
+                        nodeSet.add(e.target);
+                    });
+
+                    // Guarantee that the Top 10 highest-threat suspects ALWAYS appear on the map
+                    topNodes.slice(0, 10).forEach(s => {
+                        nodeSet.add(String(s.node_id));
+                    });
+                    
+                    if (pZeroId) {
+                        nodeSet.add(pZeroId);
+                    }
+                    
+                    // Get dimensions FIRST so nodes can be positioned
+                    let width = svgRef.current.clientWidth;
+                    let height = svgRef.current.clientHeight;
+                    if (!width || width === 0) width = 800;
+                    if (!height || height === 0) height = 500;
+
+                    // Safe zone boundaries (avoiding badge at top-left, legend at bottom-left)
+                    const PADDING_TOP = 90;
+                    const PADDING_LEFT = 80;
+                    const PADDING_RIGHT = 40;
+                    const PADDING_BOTTOM = 120;
+
+                    nodeSet.forEach(id => {
+                        if (killedNodes.has(String(id))) return;
+                        
+                        let n;
+                        if (suspectsObj[id]) {
+                            n = { id: String(id), ...suspectsObj[id] };
+                        } else if (String(id) === pZeroId) {
+                            // Force P-Zero to exist on graph even if it has no connections or threat score yet
+                            n = { id: String(id), final_score: 0.0, breakdown: {} };
+                        } else {
+                            return; // Skip normal nodes not in suspects
+                        }
+
+                        let prev = layoutStateRef.current.get(n.id);
+                        if (prev) {
+                            n.x = Math.max(PADDING_LEFT, Math.min(width - PADDING_RIGHT, prev.x));
+                            n.y = Math.max(PADDING_TOP, Math.min(height - PADDING_BOTTOM, prev.y));
+                        } else {
+                            n.x = PADDING_LEFT + Math.random() * (width - PADDING_LEFT - PADDING_RIGHT);
+                            n.y = PADDING_TOP + Math.random() * (height - PADDING_TOP - PADDING_BOTTOM);
+                        }
+                        n.vx = 0;
+                        n.vy = 0;
+                        nodes.push(n);
+                    });
+
+                    currentState.propagation_graph.forEach(e => {
+                        if(killedNodes.has(String(e.source)) || killedNodes.has(String(e.target))) return;
+                        links.push({ source: String(e.source), target: String(e.target), weight: e.weight });
+                    });
+
+                    d3.select(svgRef.current).selectAll("*").remove();
+
+                    if (nodes.length === 0) {
+                        d3.select(svgRef.current).append("text").attr("x", 20).attr("y", 20).attr("fill", "#64748b").text("Awaiting telemetry...");
+                        return;
+                    }
+
+                    const reverseAdj = {};
+                    links.forEach(l => {
+                        if(!reverseAdj[l.target]) reverseAdj[l.target] = [];
+                        reverseAdj[l.target].push({src: l.source, weight: l.weight || 0});
+                    });
+
+                    function findUpstreamPath(startId) {
+                        let pathEdges = new Set();
+                        let current = startId;
+                        let max_iter = 50;
+                        while(reverseAdj[current] && reverseAdj[current].length > 0 && max_iter > 0) {
+                            max_iter--;
+                            let sorted = [...reverseAdj[current]].sort((a,b) => b.weight - a.weight);
+                            let best = sorted[0].src;
+                            pathEdges.add(`${best}->${current}`);
+                            if(pathEdges.has(`${current}->${best}`) || pathEdges.size > 20) break;
+                            current = best;
+                        }
+                        return pathEdges;
+                    }
+
+                    const svg = d3.select(svgRef.current)
+                        .attr("viewBox", `0 0 ${width} ${height}`);
+                    
+                    const defs = svg.append("defs");
+                    
+                    const filter = defs.append("filter").attr("id", "neonGlow");
+                    filter.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "coloredBlur");
+                    const merge = filter.append("feMerge");
+                    merge.append("feMergeNode").attr("in", "coloredBlur");
+                    merge.append("feMergeNode").attr("in", "SourceGraphic");
+
+                    const shadowFilter = defs.append("filter").attr("id", "shadowCommandGlow");
+                    shadowFilter.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "blur");
+                    shadowFilter.append("feFlood").attr("flood-color", "#ef4444").attr("flood-opacity", "0.8");
+                    shadowFilter.append("feComposite").attr("in", "SourceGraphic").attr("in2", "blur").attr("operator", "over");
+
+                    // Check if we have ANY saved positions (meaning this isn't the first render)
+                    const hasSavedPositions = layoutStateRef.current.size > 0 && 
+                        nodes.some(n => layoutStateRef.current.has(n.id));
+
+                    // Physics — only use forceCenter on the FIRST render
+                    simulation = d3.forceSimulation(nodes)
+                        .alphaDecay(0.05)
+                        .alpha(hasSavedPositions ? 0.05 : 0.3)
+                        .force("link", d3.forceLink(links).id(d => d.id).distance(80).strength(d => Math.min(0.5, (d.weight || 0.1) * 0.3)))
+                        .force("charge", d3.forceManyBody().strength(d => d.id === highestScoreNodeId ? -300 : -150))
+                        .force("collide", d3.forceCollide().radius(30).iterations(2));
+
+                    // Only pull to center on a fresh start — not on data updates!
+                    // Offset center to avoid badge overlay (top-left) and legend (bottom-left)
+                    const centerX = width * 0.5;
+                    const centerY = height * 0.5 + 20;
+                    
+                    if (!hasSavedPositions) {
+                        simulation.force("center", d3.forceCenter(centerX, centerY));
+                    } else {
+                        // Keep nodes on-screen with moderate centering
+                        simulation.force("x", d3.forceX(centerX).strength(0.08));
+                        simulation.force("y", d3.forceY(centerY).strength(0.08));
+                    }
+
+                    const linkG = svg.append("g");
+                    const nodeG = svg.append("g");
+
+                    let attackPathEdges = new Set();
+                    if(selectedNode && selectedNode.id) {
+                        attackPathEdges = findUpstreamPath(selectedNode.id);
+                    }
+
+                    const link = linkG
+                        .attr("stroke", "#94a3b8")
+                        .attr("stroke-opacity", 0.25)
+                        .selectAll("line")
+                        .data(links)
+                        .join("line")
+                        .attr("stroke-width", d => Math.max(0.5, (d.weight || 0.1) * 1.5))
+                        .attr("stroke", d => {
+                            let sid = d.source.id || d.source;
+                            let tid = d.target.id || d.target;
+                            return attackPathEdges.has(`${sid}->${tid}`) ? "#ef4444" : "#94a3b8";
+                        })
+                        .attr("stroke-opacity", d => {
+                            let sid = d.source.id || d.source;
+                            let tid = d.target.id || d.target;
+                            return attackPathEdges.has(`${sid}->${tid}`) ? 0.9 : 0.25;
+                        });
+
+                    const node = nodeG
+                        .selectAll("g")
+                        .data(nodes)
+                        .join("g")
+                        .call(drag(simulation));
+
+                    const getColor = (d) => {
+                        // Top suspect is ALWAYS red
+                        if (d.id === highestScoreNodeId) return "#ef4444";
+                        // Color by overall threat level (final_score)
+                        let score = d.final_score || 0;
+                        if (score > 0.5) return "#ef4444";   // High threat = red
+                        if (score > 0.3) return "#f59e0b";   // Medium threat = orange
+                        return "#3b82f6";                     // Low threat = blue
+                    };
+
+                    node.append("circle")
+                        .attr("class", d => d.id === highestScoreNodeId ? "shadow-controller-pulse" : "")
+                        .attr("r", d => {
+                            let base = 5;
+                            if(d.final_score && !isNaN(d.final_score)) base += (d.final_score * 20);
+                            if(d.id === highestScoreNodeId) base *= 1.3;
+                            return isNaN(base) ? 5 : base;
+                        })
+                        .attr("fill", d => getColor(d))
+                        .attr("stroke", d => d.id === highestScoreNodeId ? "#ffffff" : "none")
+                        .attr("stroke-width", d => d.id === highestScoreNodeId ? 2 : 0)
+                        .attr("filter", d => {
+                            if(d.id === highestScoreNodeId) return "url(#shadowCommandGlow)";
+                            if((d.final_score || 0) > 0.5) return "url(#neonGlow)";
+                            return null;
+                        })
+                        .style("cursor", "pointer")
+                        .on("click", (e, d) => {
+                            setSelectedNode(d);
+                        });
+
+                    node.append("text")
+                        .text(d => `N-${d.id}`)
+                        .attr("x", d => {
+                            let finalX = (d.final_score && !isNaN(d.final_score)) ? 10 + (d.final_score * 20) : 12;
+                            return isNaN(finalX) ? 12 : finalX;
+                        })
+                        .attr("y", 3)
+                        .attr("fill", "#f8fafc")
+                        .attr("font-size", d => d.id === highestScoreNodeId ? "12px" : "10px")
+                        .attr("font-weight", d => d.id === highestScoreNodeId ? "bold" : "normal")
+                        .attr("font-family", "monospace");
+
+                    const topLabel = svg.append("g").attr("class", "top-label").style("opacity", 0);
+                    topLabel.append("rect").attr("fill", "#ef4444").attr("rx", 3).attr("ry", 3);
+                    topLabel.append("text").text("Suspected Command Node").attr("fill", "white").attr("font-size", "10px").attr("font-weight", "bold").attr("x", 4).attr("y", 9);
+                    
+                    const pZeroLabel = svg.append("g").attr("class", "pzero-label").style("opacity", 0);
+                    pZeroLabel.append("rect").attr("fill", "#f59e0b").attr("rx", 3).attr("ry", 3);
+                    pZeroLabel.append("text").text("Patient Zero").attr("fill", "white").attr("font-size", "10px").attr("font-weight", "bold").attr("x", 4).attr("y", 9);
+                    
+                    timer = d3.timer((elapsed) => {
+                        node.selectAll("circle.shadow-controller-pulse").attr("r", d => {
+                            let score = (d && d.final_score && !isNaN(d.final_score)) ? d.final_score : 0;
+                            let base = 5 + (score * 20);
+                            let r = (base * 1.3) + Math.sin(elapsed / 150) * 3;
+                            return isNaN(r) ? 5 : r;
+                        });
+                    });
+
+                    simulation.on("tick", () => {
+                        // HARD CLAMP: force every node to stay inside the safe zone
+                        nodes.forEach(d => {
+                            d.x = Math.max(PADDING_LEFT, Math.min(width - PADDING_RIGHT, d.x));
+                            d.y = Math.max(PADDING_TOP, Math.min(height - PADDING_BOTTOM, d.y));
+                        });
+
+                        link
+                            .attr("x1", d => d.source.x)
+                            .attr("y1", d => d.source.y)
+                            .attr("x2", d => d.target.x)
+                            .attr("y2", d => d.target.y);
+                        
+                        node
+                            .attr("transform", d => `translate(${d.x},${d.y})`);
+                        
+                        const topNodeData = nodes.find(n => n.id === highestScoreNodeId);
+                        if(topNodeData) {
+                            topLabel.style("opacity", 1)
+                                .attr("transform", `translate(${topNodeData.x - 65}, ${topNodeData.y - 35})`);
+                            topLabel.select("rect").attr("width", 135).attr("height", 14);
+                        } else {
+                            topLabel.style("opacity", 0);
+                        }
+
+                        const pZeroNodeData = pZeroId ? nodes.find(n => n.id === pZeroId) : null;
+                        if(pZeroNodeData) {
+                            // If Patient Zero is the same as Command Node, shift label down to avoid overlap
+                            let yOffset = (pZeroId === highestScoreNodeId) ? 20 : -35;
+                            pZeroLabel.style("opacity", 1)
+                                .attr("transform", `translate(${pZeroNodeData.x - 35}, ${pZeroNodeData.y + yOffset})`);
+                            pZeroLabel.select("rect").attr("width", 72).attr("height", 14);
+                        } else {
+                            pZeroLabel.style("opacity", 0);
+                        }
+
+                        // Save positions for persistence across re-renders
+                        nodes.forEach(n => {
+                            layoutStateRef.current.set(n.id, { x: n.x, y: n.y, vx: n.vx || 0, vy: n.vy || 0 });
+                        });
+                    });
+
+                    function drag(sim) {
+                        function dragstarted(event) { if (!event.active) sim.alphaTarget(0.3).restart(); event.subject.fx = event.subject.x; event.subject.fy = event.subject.y; }
+                        function dragged(event) { event.subject.fx = event.x; event.subject.fy = event.y; }
+                        function dragended(event) { if (!event.active) sim.alphaTarget(0); event.subject.fx = null; event.subject.fy = null; }
+                        return d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended);
+                    }
+                } catch(error) {
+                    console.error("[Graph Critical Failure]", error);
+                    d3.select(svgRef.current).selectAll("*").remove();
+                    d3.select(svgRef.current).append("text").attr("x", 20).attr("y", 30).attr("fill", "#ef4444").attr("font-family", "monospace").text("D3 ENGINE ERROR: " + error.message);
+                }
+                
+                return () => {
+                    if (simulation) simulation.stop();
+                    if (timer) timer.stop();
+                };
+            }, [currentState, killedNodes, selectedNode]);
+
+            const suspectsObj = currentState?.attribution_suspects || {};
+            const topNodes = Object.values(suspectsObj)
+                .filter(s => !killedNodes.has(String(s.node_id)))
+                .sort((a,b) => b.final_score - a.final_score);
+                
+            const leaderboard = topNodes.slice(0, 5);
+
+            const handleKillSwitch = async (id) => {
+                const nid = String(id);
+                setKilledNodes(prev => new Set(prev).add(nid));
+                setSelectedNode(null);
+                try {
+                    await fetch(`/api/simulate/remove_node/${nid}`, { method: 'POST' });
+                } catch(e) {}
+            };
+
+            const BarComponent = ({ label, value, color }) => (
+                <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[8px] uppercase tracking-widest text-slate-500 w-[55px] text-right">{label}</span>
+                    <div className="flex-1 bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{width: `${Math.min(100, Math.max(0, value * 100))}%`, backgroundColor: color}}></div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="flex h-full w-full text-slate-200">
+                    <div className="flex-1 flex flex-col relative bg-[#0a0f1e]" style={{overflow: 'hidden'}}>
+                        <div className="absolute top-4 left-4 z-10 p-3 bg-black/40 backdrop-blur rounded border border-slate-700/50">
+                            <h3 className="text-[12px] font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] animate-pulse"></span>
+                                Top Shadow Controller Visualized
+                            </h3>
+                            <p className="text-[9px] text-slate-400 mt-1 uppercase">Click nodes to analyze Upstream Attack Path</p>
+                        </div>
+                        
+                        <div className="absolute bottom-4 left-4 z-10 p-3 bg-black/60 backdrop-blur rounded border border-slate-700/50">
+                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-300 mb-2 border-b border-slate-700 pb-1">Legend</h4>
+                            <div className="flex items-center gap-2 text-[9px] text-slate-400 mb-1"><span className="w-3 h-3 rounded-full bg-blue-500"></span> Low Threat (&lt;30%)</div>
+                            <div className="flex items-center gap-2 text-[9px] text-slate-400 mb-1"><span className="w-3 h-3 rounded-full bg-orange-400"></span> Medium Threat (30-50%)</div>
+                            <div className="flex items-center gap-2 text-[9px] text-slate-400 mb-1"><span className="w-3 h-3 rounded-full bg-red-500"></span> High Threat (&gt;50%)</div>
+                            <div className="mt-2 text-[8px] font-mono text-slate-500">Size = Network PageRank Influence</div>
+                            <div className="text-[8px] font-mono text-slate-500">Edge Thickness = Transition Frequency</div>
+                        </div>
+
+                        {selectedNode && (
+                            <div className="absolute top-4 right-4 z-10 w-[240px] p-4 bg-slate-900 border border-slate-600 rounded-lg shadow-2xl">
+                                <div className="flex justify-between items-start mb-2">
+                                    <h3 className="text-sm font-bold text-white font-mono">Node {selectedNode.node_id}</h3>
+                                    <button onClick={() => setSelectedNode(null)} className="text-slate-400 hover:text-white">✕</button>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mb-3 leading-tight">Upstream chain to original controller highlighted in red.</p>
+                                <button 
+                                    onClick={() => handleKillSwitch(selectedNode.node_id)}
+                                    className="w-full bg-red-600 hover:bg-red-500 text-white font-bold text-[11px] uppercase tracking-widest py-2 rounded transition-colors shadow-[0_0_10px_rgba(239,68,68,0.4)] hover:shadow-[0_0_15px_rgba(239,68,68,0.7)]"
+                                >
+                                    INITIATE KILL SWITCH
+                                </button>
+                            </div>
+                        )}
+                        <svg className="w-full h-full" ref={svgRef} style={{overflow: 'hidden'}}></svg>
+                    </div>
+
+                    <div className="w-[420px] bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 relative z-20">
+                        <div className="p-4 border-b border-slate-800 shrink-0">
+                            <h2 className="text-[12px] font-bold uppercase tracking-widest text-[#00FFCC]">Top Attack Suspects</h2>
+                            <p className="text-[9px] text-slate-400 mt-1 uppercase">Attribution certainty ranking via mathematically-inferred topology</p>
+                            
+                            {killedNodes.size > 0 && (
+                                <div className="mt-3 p-3 bg-red-950/30 rounded border border-red-900/50">
+                                    <div className="text-[10px] text-red-400 font-bold mb-1 flex items-center gap-2">
+                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                        NETWORK INFLUENCE REDUCED BY ~{Math.min(99, killedNodes.size * 18)}%
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 mt-2">
+                                        {[...killedNodes].map(id => (
+                                            <span key={id} className="px-1.5 py-0.5 bg-red-900/40 border border-red-500/50 text-red-200 text-[9px] rounded font-mono shadow-sm">
+                                                Quarantined: N-{id}
+                                            </span>
+                                        ))}
+                                    </div>
+                                    <button onClick={() => setKilledNodes(new Set())} className="mt-2 text-[8px] text-slate-400 hover:text-white underline uppercase">Refresh Simulation (Restore State)</button>
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {leaderboard.length === 0 && <div className="text-center text-[11px] text-slate-500 mt-10">Waiting for graph formation...</div>}
+                            
+                            {leaderboard.map((s, index) => (
+                                <div key={s.node_id} className={`bg-slate-800/80 border ${index === 0 ? 'border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.1)]' : 'border-slate-700/60'} p-4 rounded-xl relative overflow-hidden transition-all delay-75`}>
+                                    {index === 0 && (
+                                        <div className="absolute top-0 right-0 bg-red-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-bl uppercase tracking-widest shadow-md">
+                                            #1 Controller
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between items-center mb-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-6 h-6 rounded-full bg-slate-900 flex items-center justify-center border border-slate-700 font-bold text-slate-400 text-[10px]">#{index + 1}</div>
+                                            <span className={`text-[15px] font-black font-mono ${index === 0 ? 'text-white' : 'text-slate-300'}`}>N-{s.node_id}</span>
+                                        </div>
+                                        <div className="text-[16px] font-bold font-mono text-[#00FFCC]">{(s.final_score * 100).toFixed(1)}% <span className="text-[9px] text-slate-500 font-sans uppercase">Threat</span></div>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4 mb-3">
+                                        <div>
+                                            <BarComponent label="Influence" value={s.breakdown.pagerank} color="#3b82f6" />
+                                            <BarComponent label="Anomaly" value={s.breakdown.anomaly} color="#ef4444" />
+                                            <BarComponent label="Centrality" value={s.breakdown.betweenness} color="#8b5cf6" />
+                                        </div>
+                                        <div className="flex flex-col justify-center">
+                                            <div className="text-[8px] uppercase tracking-widest text-slate-500 mb-1">Temporal Stability</div>
+                                            <div className="flex items-center gap-1">
+                                                {[1,2,3,4,5].map(i => (
+                                                    <div key={i} className={`h-1.5 flex-1 rounded-sm ${i <= Math.ceil(s.breakdown.stability * 5) ? 'bg-green-400' : 'bg-slate-700'}`}></div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="bg-slate-900/60 rounded-lg p-2.5 border border-slate-700/50">
+                                        <ul className="space-y-1.5">
+                                            {s.reasoning.map((r, i) => (
+                                                <li key={i} className="text-[9px] text-slate-300 flex items-start gap-1.5 leading-tight">
+                                                    <span className="text-red-500/80 mt-[1px]">▸</span> {r}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function App() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const { history, datasetPos, latencySeries, anomalySeries, attackVectors, latestIncident, sessionStart } = useDataStream(`${wsProtocol}//${window.location.host}/ws`);
@@ -1543,6 +1995,7 @@
             const [heatmapHover, setHeatmapHover] = useState(null);
             const [trustHover, setTrustHover] = useState(null);
             const [temporalHover, setTemporalHover] = useState(null);
+            const [killedNodes, setKilledNodes] = useState(new Set());
 
             const trustDevRef = useRef(null);
             const userScrolledAwayRef = useRef(false);
@@ -1653,14 +2106,18 @@
                 const timestamp = backendLog?.timestamp || (latest._receivedAt ? fmt24(new Date(latest._receivedAt)) : fmt24());
 
                 const newAlerts = [];
-                latest.nodes.forEach(n => {
+                const eventsToProcess = latest.tick_events || [];
+                eventsToProcess.forEach(te => {
+                    const n = latest.nodes.find(node => String(node.node_id) === String(te.node_id));
+                    if (!n) return;
                     const nodeId = n.node_id;
-                    // Log ALL nodes every tick — anomalous and normal
+                    // Log the chronologically ordered event
                     const key = `${latest.dataset_position}-${nodeId}`;
                     if (!lastAlertKey.current.has(key)) {
                         const isAnomaly = n.anomalies && n.anomalies.length > 0;
                         newAlerts.push({
                             timestamp,
+                            timestamp_iso: latest._receivedAt ? new Date(latest._receivedAt).toISOString() : new Date().toISOString(),
                             node_id: nodeId,
                             anomaly_type: isAnomaly ? n.anomalies[0] : 'NORMAL',
                             http: n.raw_telemetry ? n.raw_telemetry.http_status : 200,
@@ -1765,7 +2222,7 @@
                 if (newAlerts.length > 0) {
                     setAllAlerts(prev => {
                         const c = [...prev, ...newAlerts];
-                        return c.length > 300 ? c.slice(c.length - 300) : c;
+                        return c.length > 10000 ? c.slice(c.length - 10000) : c;
                     });
                 }
             }, [history]);
@@ -2161,7 +2618,8 @@
                                     { id: 'analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
                                     { id: 'registry', label: 'Live Assets', icon: 'M4 6h16M4 10h16M4 14h16M4 18h16' },
                                     { id: 'schema', label: 'Schema Console', icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4' },
-                                    { id: 'heatmap', label: 'Deceptive Map', icon: 'M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z' }
+                                    { id: 'heatmap', label: 'Deceptive Map', icon: 'M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z' },
+                                    { id: 'attribution', label: 'Shadow Control', icon: 'M13 10V3L4 14h7v7l9-11h-7z' }
                                 ].map(tab => (
                                     <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                                         className={`w-full text-left px-3 py-2.5 rounded-lg text-[11px] font-semibold flex items-center gap-2.5 transition-all duration-150 ${activeTab === tab.id ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}>
@@ -2259,14 +2717,14 @@
                                                     <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b" opacity="0.7" />
                                                 </marker>
                                             </defs>
-                                            {currentState.propagation_graph && currentState.propagation_graph.map((edge, i) => {
+                                            {(currentState.forensic_edges || []).map((edge, i) => {
                                                 const src = nodePositions[edge.source];
                                                 const tgt = nodePositions[edge.target];
                                                 if (!src || !tgt) return null;
                                                 return <line key={`e-${i}`} x1={`${src.x}%`} y1={`${src.y}%`} x2={`${tgt.x}%`} y2={`${tgt.y}%`} stroke="#ef4444" strokeWidth="2" strokeDasharray="8 4" opacity="0.7" markerEnd="url(#arrow-red)" className="line-draw" />
                                             })}
                                             {pZero && pZero.linked_nodes && pZero.linked_nodes.map(tid => {
-                                                if (currentState.propagation_graph && currentState.propagation_graph.some(e => e.target === tid)) return null;
+                                                if ((currentState.forensic_edges || []).some(e => e.target === tid)) return null;
                                                 const src = nodePositions[pZero.patient_zero_node];
                                                 const tgt = nodePositions[tid];
                                                 if (!src || !tgt) return null;
@@ -2430,6 +2888,13 @@
                                                         </div>
                                                     )}
                                                 </div>
+                                                <button onClick={() => {
+                                                    setHistSearch(String(selectedNode.node_id));
+                                                    setIsHistoryOpen(true);
+                                                }} className="mt-4 w-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm flex justify-center items-center gap-1.5">
+                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                    View Node History in Ledger
+                                                </button>
                                             </div>
                                         ) : (
                                             <div className="text-xs text-slate-400 italic py-4 text-center">Click a node on the map or table to inspect</div>
@@ -2537,27 +3002,27 @@
                                             }}
                                         >
                                             <div className="flex items-end gap-px h-full">
-                                                {trustDevHistory.map((h, i) => {
-                                                    const tickTrust = h.latest_tick_trust !== undefined ? h.latest_tick_trust : 100;
+                                                {trustDevHistory.flatMap((h, h_i) => h.tick_events ? h.tick_events.map((node, n_i) => {
+                                                    const tickTrust = node.trust_score !== undefined ? node.trust_score : 100;
                                                     const barHeight = Math.max(4, tickTrust * 0.85);
                                                     let color = '#22c55e';
                                                     if (tickTrust < 50) color = '#ef4444';
                                                     else if (tickTrust < 80) color = '#eab308';
-                                                    const matchNode = h.nodes && h.nodes.length > 0 ? h.nodes.reduce((best, n) => Math.abs(n.trust_score - tickTrust) < Math.abs(best.trust_score - tickTrust) ? n : best, h.nodes[0]) : null;
+                                                    const matchNode = node;
+                                                    const tickId = h.timestamp || h_i;
                                                     return (
-                                                        <div key={i} className="flex flex-col items-center justify-end h-full cursor-pointer group" style={{ zIndex: 1, minWidth: '12px', flex: '0 0 12px' }}
+                                                        <div key={`${tickId}-${matchNode.node_id}-${n_i}`} className="flex flex-col items-center justify-end h-full group" style={{ zIndex: 1, minWidth: '12px', flex: '0 0 12px' }}
                                                             onMouseEnter={(e) => {
                                                                 const rect = e.currentTarget.getBoundingClientRect();
                                                                 setTrustHover({ node: matchNode ? matchNode.node_id : '?', trust: Math.round(tickTrust), x: rect.left + rect.width / 2, y: rect.top - 6 });
                                                             }}
-                                                            onMouseLeave={() => setTrustHover(null)}
-                                                            onClick={() => { if (matchNode) setOverlayNode(matchNode); }}>
+                                                            onMouseLeave={() => setTrustHover(null)}>
                                                             <div className="w-full rounded-t-sm transition-all duration-200 hover:opacity-80 relative" style={{ height: `${barHeight}%`, backgroundColor: color }}>
                                                             </div>
                                                             <span className="text-[6px] font-mono text-slate-400 mt-[2px] truncate w-full text-center leading-none">{matchNode ? matchNode.node_id : ''}</span>
                                                         </div>
                                                     );
-                                                })}
+                                                }) : [])}
                                             </div>
                                         </div>
                                     </div>
@@ -2629,8 +3094,8 @@
                                         <button onClick={async () => {
                                             if (!allAlerts.length) return;
                                             const headers = ['Timestamp','Node ID','Event Type','HTTP','Latency (ms)','Load (%)','Trust'];
-                                            const csvRows = [headers.join(','), ...allAlerts.slice(-80).map(r => [
-                                                r.timestamp, r.node_id, r.anomaly_type, r.http, r.latency, r.load, r.trust
+                                            const csvRows = [headers.join(','), ...allAlerts.slice(-10000).map(r => [
+                                                r.timestamp_iso || r.timestamp, r.node_id, r.anomaly_type, r.http, r.latency, r.load, r.trust
                                             ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))];
                                             const csvString = '\uFEFF' + csvRows.join('\n');
                                             const fname = `aegis_stream_${Date.now()}.csv`;
@@ -2664,7 +3129,7 @@
                                         </button>
                                     </div>
                                     <div className="overflow-y-auto space-y-1.5 pr-1" style={{ maxHeight: '400px', scrollbarWidth: 'thin', scrollbarColor: '#475569 #0f172a' }}>
-                                        {allAlerts.slice(-80).reverse().map((log, i) => (
+                                        {allAlerts.slice(-10000).reverse().map((log, i) => (
                                             <div key={i} className={`font-mono text-[9px] leading-relaxed border-l-2 pl-2 ${log.isAnomaly ? 'border-red-500/60' : 'border-slate-600/30'}`}>
                                                 <span className="text-slate-500">[{log.timestamp}]</span>{' '}
                                                 <span className="text-blue-400 font-bold">N-{log.node_id}</span>{' '}
@@ -3151,6 +3616,15 @@
                                 </div>
                             </div>{/* end heatmap tab */}
 
+                            {/* ===== ATTRIBUTION TAB ===== */}
+                            <div style={{ display: activeTab === 'attribution' ? 'flex' : 'none' }} className="flex-col h-full overflow-hidden w-full bg-[#f8fafc]">
+                                <ShadowControllerMap 
+                                    currentState={currentState} 
+                                    killedNodes={killedNodes}
+                                    setKilledNodes={setKilledNodes}
+                                />
+                            </div>
+
                             {/* Temporal Heatmap tab removed — functionality merged into Sleeper Graph */}
 
                         </main>{/* end main content */}
@@ -3168,7 +3642,7 @@
 
                     {/* ===== NODE ANALYSIS OVERLAY ===== */}
                     {overlayNode && (
-                        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setOverlayNode(null)}>
+                        <div className="absolute inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setOverlayNode(null)}>
                             <div className="bg-white dark:bg-slate-900 w-[500px] max-h-[90vh] overflow-y-auto border-[0.5px] border-slate-300 dark:border-slate-700 shadow-2xl rounded" onClick={e => e.stopPropagation()}>
                                 <div className="flex justify-between items-center p-3 border-b-[0.5px] border-slate-200 dark:border-slate-800">
                                     <div className="flex items-baseline gap-2">
@@ -3234,6 +3708,7 @@
                                             <option value="CRITICAL">CRITICAL</option>
                                             <option value="MEDIUM">MEDIUM</option>
                                             <option value="LOW">LOW</option>
+                                            <option value="0">NORMAL (0)</option>
                                         </select>
                                         <select className="text-[10px] px-2 py-1.5 border border-slate-300 rounded bg-white focus:outline-none focus:border-indigo-500 font-bold text-slate-600" value={histType} onChange={e => setHistType(e.target.value)}>
                                             <option value="">ALL VECTORS</option>
@@ -3258,9 +3733,9 @@
                                                 const rows = json.data || [];
                                                 if (!rows.length) return;
                                                 
-                                                const headers = ['Timestamp','Node ID','Attack Vector','Severity','Trust Before','Trust After','Trust Delta','HTTP Status','JSON Status','Schema','Latency (ms)','Identity'];
+                                                const headers = ['Log ID','Timestamp','Node ID','Attack Vector','Severity','Trust Before','Trust After','Trust Delta','HTTP Status','JSON Status','Schema','Latency (ms)','Identity'];
                                                 const csvRows = [headers.join(','), ...rows.map(r => [
-                                                    r.timestamp, r.node_id, r.anomaly_type, r.severity,
+                                                    r.log_id, r.timestamp, r.node_id, r.anomaly_type, r.severity === '0' || r.severity === 0 ? 'NORMAL' : r.severity,
                                                     Math.round(r.trust_before), Math.round(r.trust_after), Math.round(r.trust_delta),
                                                     r.http_status, r.json_status, r.schema_version, r.latency_ms != null ? Math.round(r.latency_ms) : '',
                                                     r.decoded_identity
@@ -3311,7 +3786,8 @@
                                     <table className="w-full text-left text-[11px] border-collapse relative">
                                         <thead className="bg-[#f8fafc] text-[9px] text-slate-500 uppercase tracking-wider font-semibold sticky top-0 z-10 shadow-sm border-b border-slate-200">
                                             <tr>
-                                                <th className="p-3 pl-5 whitespace-nowrap">Timestamp</th>
+                                                <th className="p-3 pl-5">Log ID</th>
+                                                <th className="p-3 whitespace-nowrap">Timestamp</th>
                                                 <th className="p-3">Node ID</th>
                                                 <th className="p-3">Attack Vector</th>
                                                 <th className="p-3 text-center">Severity</th>
@@ -3325,7 +3801,7 @@
                                         </thead>
                                         <tbody className="font-mono text-[10px] text-slate-700">
                                             {historyLog.length === 0 ? (
-                                                <tr><td colSpan="10" className="p-8 text-center text-slate-400">Ledger is aggressively clean. Awaiting incidents...</td></tr>
+                                                <tr><td colSpan="11" className="p-8 text-center text-slate-400">Ledger is aggressively clean. Awaiting incidents...</td></tr>
                                             ) : (() => {
                                                 let lastDateGroup = '';
                                                 const rows = [];
@@ -3336,7 +3812,7 @@
                                                         lastDateGroup = dateStr;
                                                         rows.push(
                                                             <tr key={`date-${idx}`} className="bg-slate-100 border-y border-slate-200">
-                                                                <td colSpan="10" className="p-2 pl-5 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+                                                                <td colSpan="11" className="p-2 pl-5 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
                                                                     <span className="flex items-center gap-2">
                                                                         <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                                                         {dateStr}
@@ -3346,13 +3822,28 @@
                                                         );
                                                     }
                                                     rows.push(
-                                                        <tr key={row.id} className="border-b border-slate-100/80 hover:bg-slate-50 transition-colors">
-                                                            <td className="p-3 pl-5 whitespace-nowrap text-slate-400 font-mono">{(() => { try { const d = new Date(row.timestamp); return fmt24(d); } catch(e) { return row.timestamp; } })()}</td>
+                                                        <tr key={row.id} 
+                                                            className="border-b border-slate-100/80 hover:bg-slate-100 transition-colors cursor-pointer"
+                                                            onClick={() => {
+                                                                const n = currentState?.nodes?.find(x => String(x.node_id) === String(row.node_id));
+                                                                if (n) setOverlayNode(n);
+                                                                else {
+                                                                    setOverlayNode({
+                                                                        node_id: row.node_id,
+                                                                        trust_score: row.trust_after,
+                                                                        anomalies: [row.anomaly_type],
+                                                                        decoded_identity: row.decoded_identity
+                                                                    });
+                                                                }
+                                                            }}
+                                                        >
+                                                            <td className="p-3 pl-5 font-black text-indigo-600 font-mono text-[9px]">#{row.log_id ?? '—'}</td>
+                                                            <td className="p-3 whitespace-nowrap text-slate-400 font-mono">{(() => { try { const d = new Date(row.timestamp); return fmt24(d); } catch(e) { return row.timestamp; } })()}</td>
                                                             <td className="p-3 font-bold text-slate-700">{row.node_id}</td>
                                                             <td className="p-3">{row.anomaly_type.replace(/_/g, ' ')}</td>
                                                             <td className="p-3 text-center">
-                                                                <span className={`px-2 py-0.5 rounded text-[8px] font-bold tracking-widest ${row.severity === 'CRITICAL' ? 'bg-red-50 text-red-600 border border-red-100' : row.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-600 border border-amber-100' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
-                                                                    {row.severity}
+                                                                <span className={`px-2 py-0.5 rounded text-[8px] font-bold tracking-widest ${row.severity === 'CRITICAL' ? 'bg-red-50 text-red-600 border border-red-100' : row.severity === 'MEDIUM' ? 'bg-amber-50 text-amber-600 border border-amber-100' : row.severity === 'LOW' ? 'bg-orange-50 text-orange-600 border border-orange-100' : 'bg-green-50 text-green-600 border border-green-200'}`}>
+                                                                    {row.severity === '0' || row.severity === 0 ? 'NORMAL' : row.severity}
                                                                 </span>
                                                             </td>
                                                             <td className="p-3">

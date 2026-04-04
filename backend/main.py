@@ -180,6 +180,56 @@ def serve_csv_file(file_id: str, filename: str):
         return Response(content="File expired", status_code=404)
     return FileResponse(path=data["path"], filename=data["filename"], media_type="text/csv")
 
+@app.get("/api/detect")
+def get_attribution():
+    """
+    Purpose: Returns the current convicted Shadow Controllers based on Mathematical Engine.
+    """
+    try:
+        active_nids = list(reconstructor.nodes.keys())
+        results = reconstructor.attribution_engine.execute_attribution(active_nids, reconstructor.tick_counter)
+        sorted_suspects = sorted(results.values(), key=lambda x: x["final_score"], reverse=True)
+        return {"status": "success", "data": sorted_suspects[:10]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/metrics")
+def get_metrics():
+    """
+    Purpose: Returns engine tracking metrics.
+    """
+    try:
+        edges = len(reconstructor.attribution_engine.graph_engine.edges)
+    except Exception:
+        edges = len(reconstructor.propagation_graph)
+        
+    return {
+        "status": "success", 
+        "data": {
+            "tick": getattr(reconstructor, 'tick_counter', 0),
+            "tracked_nodes": len(reconstructor.nodes),
+            "propagation_edges": edges
+        }
+    }
+
+
+@app.post("/api/simulate/remove_node/{node_id}")
+async def remove_node_simulation(node_id: str):
+    """
+    Purpose: Drops the target node from graph engine to visually simulate a Kill-Switch operation.
+    """
+    try:
+        reconstructor.attribution_engine.graph_engine.kill_node(node_id)
+        # We can also track it in reconstructor if needed:
+        if not hasattr(reconstructor, 'killed_nodes'):
+            reconstructor.killed_nodes = set()
+        reconstructor.killed_nodes.add(int(node_id))
+        
+        # Optionally force a tick broadcast or wait for loop
+        return {"status": "success", "message": f"Killed node {node_id} network edges"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 async def simulation_loop():
     """
     Purpose: Asynchronous daemon dictating engine progression.
@@ -258,6 +308,8 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     clients.append(websocket)
     print("Dashboard connected. Resetting engine and dataset to 0 for a fresh start...")
+    global is_paused
+    is_paused = False
     streamer.seek(0)
     reconstructor.reset()
     try:

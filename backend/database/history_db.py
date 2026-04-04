@@ -42,12 +42,17 @@ class HistoryDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_anomaly ON INCIDENT_HISTORY(anomaly_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_severity ON INCIDENT_HISTORY(severity)")
 
+            try:
+                cursor.execute("ALTER TABLE INCIDENT_HISTORY ADD COLUMN log_id INTEGER")
+            except:
+                pass
+
     def insert_incident(self, node_id: str, anomaly_type: str, severity: str, 
                         trust_before: float, trust_after: float, 
                         http_status: int = None, json_status: str = None,
                         schema_version: str = None, decoded_identity: str = None,
                         propagation_source: str = None, debounce_window_sec: float = 2.0,
-                        latency_ms: float = None) -> bool:
+                        latency_ms: float = None, log_id: int = None) -> bool:
         """
         Inserts an anomaly, returning True if inserted or False if debounced.
         Debounce: Blocks identical anomaly_type on node_id within X seconds.
@@ -80,13 +85,13 @@ class HistoryDatabase:
                     timestamp, node_id, anomaly_type, severity, 
                     trust_before, trust_after, trust_delta,
                     http_status, json_status, schema_version, 
-                    decoded_identity, propagation_source, batch_id, latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    decoded_identity, propagation_source, batch_id, latency_ms, log_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 now_ts.isoformat(), node_id, anomaly_type, severity,
                 trust_before, trust_after, trust_delta,
                 http_status, json_status, schema_version, 
-                decoded_identity, propagation_source, None, latency_ms
+                decoded_identity, propagation_source, None, latency_ms, log_id
             ))
             
         self._check_prune()
@@ -112,8 +117,8 @@ class HistoryDatabase:
         query = "SELECT * FROM INCIDENT_HISTORY WHERE 1=1"
         params = []
         if node_id:
-            query += " AND node_id LIKE ?"
-            params.append(f"%{node_id}%")
+            query += " AND node_id = ?"
+            params.append(node_id)
         if anomaly_type:
             query += " AND anomaly_type = ?"
             params.append(anomaly_type)

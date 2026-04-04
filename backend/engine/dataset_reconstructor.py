@@ -54,6 +54,10 @@ class DatasetReconstructor:
         }
         self.latest_incident = None
 
+        from config.attribution_config import AttributionConfig
+        from engine.attribution_engine import AttributionEngine
+        self.attribution_engine = AttributionEngine(AttributionConfig)
+
     def reset(self):
         self.nodes.clear()
         self.tracker = PatientZeroTracker()
@@ -70,6 +74,10 @@ class DatasetReconstructor:
             "LATENCY_SPIKE": 0, "DDOS_ATTACK": 0, "GHOST_NODE": 0
         }
         self.latest_incident = None
+
+        from config.attribution_config import AttributionConfig
+        from engine.attribution_engine import AttributionEngine
+        self.attribution_engine = AttributionEngine(AttributionConfig)
 
     def _get_or_create_node(self, node_id: int) -> NodeState:
         if node_id not in self.nodes:
@@ -105,6 +113,7 @@ class DatasetReconstructor:
                 edge = (owner, node_id)
                 if edge not in self.propagation_graph:
                     self.propagation_graph.append(edge)
+                    self.attribution_engine.record_propagation(owner, node_id, current_time)
                     self.generated_logs.append(self.logger.emit(
                         str(node_id), "LATERAL_MOVEMENT", node.current_trust,
                         f"Stolen ID {decoded_id} from Node {owner}"
@@ -154,7 +163,6 @@ class DatasetReconstructor:
             elif "DDOS" in primary: self.attack_vector_counts["DDOS_ATTACK"] = self.attack_vector_counts.get("DDOS_ATTACK", 0) + 1
             elif "GHOST" in primary: self.attack_vector_counts["GHOST_NODE"] = self.attack_vector_counts.get("GHOST_NODE", 0) + 1
 
-
             self.latest_incident = {
                 "timestamp": current_time,
                 "node_id": node_id,
@@ -163,24 +171,30 @@ class DatasetReconstructor:
                 "message": f"Trust dropped to {int(node.current_trust)} via {primary.replace('_', ' ')}"
             }
 
-            severity = "CRITICAL" if penalty >= 45 else ("MEDIUM" if penalty >= 25 else "LOW")
-            self.history_db.insert_incident(
-                node_id=str(node_id),
-                anomaly_type=primary,
-                severity=severity,
-                trust_before=trust_before_event,
-                trust_after=node.current_trust,
-                http_status=event.get("http_response_code"),
-                json_status=event.get("json_status"),
-                schema_version=event.get("schema_version"),
-                decoded_identity=decoded_id,
-                latency_ms=round(event.get("response_time_ms", 0)),
-                debounce_window_sec=2.0
-            )
-
             self.tracker.log_anomaly(AnomalyEvent(
                 str(node_id), current_time, primary, int(penalty)
             ))
+
+        # ALWAY LOG TO HISTORY DB (Per User Request)
+        primary_anomaly = anomaly_types[0] if anomaly_types else "NORMAL_TRAFFIC"
+        severity = "0" if penalty == 0 else "LOW"
+        if penalty >= 45: severity = "CRITICAL"
+        elif penalty >= 25: severity = "MEDIUM"
+
+        self.history_db.insert_incident(
+            node_id=str(node_id),
+            anomaly_type=primary_anomaly,
+            severity=severity,
+            trust_before=trust_before_event,
+            trust_after=node.current_trust,
+            http_status=event.get("http_response_code"),
+            json_status=event.get("json_status"),
+            schema_version=event.get("schema_version"),
+            decoded_identity=decoded_id,
+            latency_ms=round(event.get("response_time_ms", 0)),
+            debounce_window_sec=2.0 if penalty > 0 else 0.0,
+            log_id=int(event.get("log_id", -1))
+        )
 
         # Update the node's stored telemetry so snapshots are always fresh
         node.last_http = event["http_response_code"]
@@ -193,8 +207,7 @@ class DatasetReconstructor:
         node.last_is_infected = event["is_infected"]
         node.last_anomalies = anomaly_types
 
-        # Track this tick's trust for the heatmap
-        self.latest_tick_trust = node.current_trust
+        self.attribution_engine.record_event(node_id, event, current_time)
 
         return node_id
 
@@ -220,8 +233,12 @@ class DatasetReconstructor:
         self.generated_logs = []
         self.tick_counter += 1
 
+        min_batch_trust = 100.0
         for event in events:
-            self.process_event(event)
+            nid = self.process_event(event)
+            min_batch_trust = min(min_batch_trust, self.nodes[nid].current_trust)
+            
+        self.latest_tick_trust = min_batch_trust
 
         p0_info = self.tracker.resolve_cluster(self.tick_counter)
 
@@ -238,6 +255,20 @@ class DatasetReconstructor:
         # Build FRESH snapshots from live NodeState objects (not stale dicts)
         all_nodes = [self._build_node_snapshot(ns) for ns in self.nodes.values()]
 
+        self.attribution_engine.record_batch(events, self.tick_counter)
+
+        active_nids = list(self.nodes.keys())
+        if hasattr(self, 'killed_nodes'):
+            active_nids = [nid for nid in active_nids if int(nid) not in self.killed_nodes]
+            
+        attribution_results = self.attribution_engine.execute_attribution(active_nids, self.tick_counter)
+        G = self.attribution_engine.graph_engine.build_normalized_graph(self.tick_counter)
+        all_viz_edges = [{"source": str(u), "target": str(v), "weight": float(d.get('weight', 0.5))} for u, v, d in G.edges(data=True)]
+        
+        # For the Forensic Map: only show top 50 strongest edges to keep it clean
+        sorted_edges = sorted(all_viz_edges, key=lambda e: e["weight"], reverse=True)
+        forensic_edges = sorted_edges[:50]
+
         # Update rolling series (last 60)
         avg_latency = sum(e["response_time_ms"] for e in events) / len(events) if events else 0
         self.latency_series.append(avg_latency)
@@ -251,10 +282,14 @@ class DatasetReconstructor:
             "nodes": all_nodes,
             "new_logs": self.generated_logs,
             "patient_zero": p0_info,
+            "attribution_suspects": attribution_results,
             "dataset_position": events[-1]["log_id"] if events else 0,
             "total_events": 10000,
-            "propagation_graph": [{"source": str(s), "target": str(t)} for s, t in self.propagation_graph],
+            "propagation_graph": all_viz_edges,
+            "forensic_edges": forensic_edges,
+            "propagation_edges": len(all_viz_edges),
             "latest_tick_trust": round(self.latest_tick_trust, 1),
+            "tick_events": [{"node_id": str(e["node_id"]), "trust_score": round(self.nodes[e["node_id"]].current_trust, 1)} for e in events if e["node_id"] in self.nodes],
             "metrics": {
                 "latency_series": self.latency_series,
                 "anomaly_series": self.anomaly_count_series,
